@@ -15,6 +15,14 @@ from relay.engine.build_spec_prompt import build as build_spec
 from relay.engine.extract_fix import FixExtractionError, extract
 from relay.engine.extract_review import ReviewExtractionError, extract as extract_review_run
 from relay.engine.extract_spec import SpecExtractionError, extract as extract_spec_draft
+from relay.engine.repo import (
+    RepoError,
+    build_commit_message,
+    checkout_or_create_branch,
+    dirty_files,
+    select_files_to_commit,
+    stage_and_commit,
+)
 from relay.engine.state import DEFAULT_GATE_SEVERITIES, RunState, default_state_dir
 from relay.engine.verify_excerpts import verify
 from relay.providers import openai_compat_client, registry
@@ -39,6 +47,7 @@ def cmd_run_start(args):
         args.run_id,
         max_iterations=args.max_iterations,
         gate_severities=gate,
+        spec_file=args.spec_file,
         state_dir=args.state_dir or default_state_dir(),
     )
     state.start_iteration()
@@ -247,6 +256,53 @@ def cmd_review_run(args):
     )
 
 
+def cmd_repo_setup(args):
+    """Idempotently ensure a run's dedicated branch exists and is checked
+    out in target_repo_root, before Find/Fix touch any files. See
+    CONTRACT.md's "Repository management" section. Local-only — no push,
+    no remote, no PR.
+    """
+    _load_state(args.run_id, args)  # just validates run_id exists
+    branch = args.branch or f"relay/{args.run_id}"
+    try:
+        result = checkout_or_create_branch(args.target_repo_root, branch)
+    except RepoError as e:
+        print(str(e), file=sys.stderr)
+        sys.exit(1)
+    print(f"{branch}: {result}")
+
+
+def cmd_repo_commit(args):
+    """Stage and commit exactly this run's fixed-finding files that are
+    still dirty. Local-only — no push, no remote, no PR; see
+    CONTRACT.md's "Repository management" section for the file-selection
+    algorithm (intersection of fixed-finding files and live git dirty
+    state, deliberately not the finding's iteration field).
+    """
+    state = _load_state(args.run_id, args)
+    fixed = [f for f in state.findings if f["status"] == "fixed"]
+    dirty = dirty_files(args.target_repo_root)
+    files = select_files_to_commit({f["file"] for f in fixed}, dirty)
+    if not files:
+        print("nothing to commit: no fixed finding's file is currently dirty", file=sys.stderr)
+        sys.exit(1)
+
+    committed_findings = [f for f in fixed if f["file"] in files]
+    message = build_commit_message(committed_findings, spec_file=state.spec_file, summary_override=args.message)
+    try:
+        sha = stage_and_commit(args.target_repo_root, files, message)
+    except RepoError as e:
+        print(str(e), file=sys.stderr)
+        sys.exit(1)
+
+    state.set_phase("commit")
+    print(f"committed {sha[:12]} — {len(files)} file(s): {', '.join(sorted(files))}")
+
+    leftover = dirty - files
+    if leftover:
+        print(f"note: still dirty, not part of this run's fixed findings: {', '.join(sorted(leftover))}", file=sys.stderr)
+
+
 def cmd_quota_status(args):
     from relay.providers.rate_limiter import RpmLimiter
 
@@ -305,6 +361,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("run_id")
     p.add_argument("--max-iterations", type=int, default=3)
     p.add_argument("--gate-severities", help="comma-separated, e.g. CRITICAL,HIGH (default on first create)")
+    p.add_argument(
+        "--spec-file",
+        default=None,
+        help="path to the spec document that drove this run, for traceability (not validated to exist)",
+    )
     _state_dir_arg(p)
     p.set_defaults(func=cmd_run_start)
 
@@ -382,6 +443,25 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--output", default=None, help="write the review here instead of printing to stdout")
     p.add_argument("--force", action="store_true", help="overwrite --output if it already exists")
     p.set_defaults(func=cmd_review_run)
+
+    repo = sub.add_parser("repo", help="local git plumbing for a run's branch and commits").add_subparsers(
+        dest="repo_command", required=True
+    )
+    p = repo.add_parser("setup", help="idempotently ensure a run's dedicated branch exists and is checked out")
+    p.add_argument("run_id")
+    p.add_argument("target_repo_root", type=Path)
+    p.add_argument("--branch", default=None, help="branch name (default: relay/<run_id>)")
+    _state_dir_arg(p)
+    p.set_defaults(func=cmd_repo_setup)
+
+    p = repo.add_parser("commit", help="stage and commit exactly this run's fixed-finding files, if any are dirty")
+    p.add_argument("run_id")
+    p.add_argument("target_repo_root", type=Path)
+    p.add_argument(
+        "-m", "--message", default=None, help="override the commit headline (structured body is still auto-generated)"
+    )
+    _state_dir_arg(p)
+    p.set_defaults(func=cmd_repo_commit)
 
     quota = sub.add_parser("quota", help="model-provider request volume").add_subparsers(
         dest="quota_command", required=True

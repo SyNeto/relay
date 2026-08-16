@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.6.0 — Run→spec traceability and local repo management
+
+Two independently-scoped, deliberately small features: linking a run back to the spec document that drove
+it, and mechanizing the local git plumbing (branch isolation, scoped commits) around the Commit role —
+pushing, pull requests, and any remote interaction stay explicitly out of scope, deferred to a later "glue"
+design.
+
+`RunState` gains an optional `spec_file` field, fixed at creation like `max_iterations`/`gate_severities`
+already are: `relay run start --spec-file PATH` (not validated to exist — it's a provenance string, may
+point outside the target repo entirely), rendered as a `Spec:` line in `relay run status`. New CONTRACT.md
+State model row; back-compat handled so a pre-existing `state.json` without the field reloads as
+`spec_file: None` rather than raising.
+
+New `src/relay/engine/repo.py`, wrapping `git` via `subprocess` directly (no new dependency — nothing else
+in this codebase uses a git library either), one `RepoError`, same fail-loudly discipline as
+`apply_fix.py`. `relay repo setup <run_id> <target_repo_root> [--branch NAME]` idempotently ensures a
+dedicated branch (default `relay/<run_id>`) exists and is checked out, refusing loudly if the tree is dirty
+on a different branch — meant to run right after Start, before Find/Fix touch anything. `relay repo commit
+<run_id> <target_repo_root> [-m TEXT]` stages and commits exactly the **intersection** of this run's
+`fixed`-finding files and whatever git currently reports as dirty — deliberately not the finding's
+`iteration` field, which `record_finding` stamps once at Find time and never updates, so it can't answer
+"what changed this iteration" for a finding fixed in a later iteration than it was recorded. Scoping by
+status + live dirty-state instead self-corrects with no new bookkeeping (already-committed files drop out
+because they're no longer dirty) and is indifferent to *how* a finding was fixed — `relay fix run` or by
+hand, both look identical to the algorithm. Never `git add -A`/`-u`; refuses loudly on an empty
+intersection; notes any leftover dirty files outside the committed set rather than dropping them silently.
+
+CONTRACT.md: Roles table's Commit row reworded (partially mechanized — mechanics vs. judgment split); new
+"Repository management" section (placed after Review, before CLI surface); Evidence convention rewritten —
+it previously said committing is "not a `relay` subcommand," which this release makes literally false, so
+the section now explains why `repo commit` doesn't violate the guarantee that sentence protected (`relay`
+still never commits without the driving agent's explicit action; invoking `repo commit` *is* that action,
+same as invoking `fix run` is the action that applies a fix).
+
+Skill files: `SKILL.md`/`AGENT.md`'s existing "5. Commit." step described the now-superseded plain-git-only
+path as the only option — actively wrong, not just silent, once this shipped — so it got a surgical fix
+pointing at `repo setup`/`repo commit` in this same release. Everything else (capabilities-table row,
+playbook integration) stays a deferred fast-follow, same precedent 0.5.1 set for `spec draft`/`review run`.
+
 ## 0.5.1 — Skill coverage for spec draft and review run
 
 Fast-follow on a gap left open by both 0.3.0 (Discover & Generate) and 0.5.0 (Review): the packaged

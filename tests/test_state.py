@@ -1,6 +1,51 @@
+import json
 from pathlib import Path
 
 from relay.engine.state import RunState
+
+
+def test_spec_file_persists_across_reload(tmp_path: Path):
+    s1 = RunState("r1", state_dir=tmp_path, spec_file="docs/SPEC.md")
+    s1.start_iteration()
+
+    s2 = RunState("r1", state_dir=tmp_path)
+    assert s2.spec_file == "docs/SPEC.md"
+
+
+def test_spec_file_defaults_to_none(tmp_path: Path):
+    s = RunState("r1", state_dir=tmp_path)
+
+    assert s.spec_file is None
+
+
+def test_spec_file_backward_compat_with_old_state_json(tmp_path: Path):
+    state_path = tmp_path / "r1" / "state.json"
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text(json.dumps({
+        "run_id": "r1",
+        "max_iterations": 3,
+        "gate_severities": ["HIGH"],
+        "started_at": 0,
+        "iteration": 0,
+        "phase": "find",
+        "findings": [],
+    }))
+
+    s = RunState("r1", state_dir=tmp_path)
+
+    assert s.spec_file is None
+
+
+def test_render_includes_spec_file_line_when_set(tmp_path: Path):
+    s = RunState("r1", state_dir=tmp_path, spec_file="docs/SPEC.md")
+
+    assert "Spec: docs/SPEC.md" in s.render()
+
+
+def test_render_omits_spec_file_line_when_unset(tmp_path: Path):
+    s = RunState("r1", state_dir=tmp_path)
+
+    assert "Spec:" not in s.render()
 
 
 def test_persists_across_reload(tmp_path: Path):
