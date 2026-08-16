@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.5.0 — Review (independent critique)
+
+Fourth capability, alongside Fix (excerpt correction) and Generate (document drafting): `relay review run
+--decision TEXT --context-file PATH [--context-file PATH ...]` produces an independent critique of an
+architectural or technical decision. Stateless, same as `spec draft` — no `run_id`, no `RunState`. New
+strict envelope (`<<<REVIEW>>>`/`<<<END_REVIEW>>>`, `src/relay/prompts/review_system.md` +
+`review_prompt.md`, `engine/build_review_prompt.py` + `engine/extract_review.py`) with one deliberate
+difference from every other envelope in this project: **no decline form.** `CANNOT_FIX` and
+`INSUFFICIENT_CONTEXT` exist because those tasks can legitimately fail on thin input; a review's whole job
+is reasoning productively about thin or contested input, so giving it an escape hatch would just make
+"insufficient context" a socially acceptable way to dodge taking a critical stance.
+
+The prompt contract inverts `spec_system.md`'s core grounding rule on purpose. `spec_system.md` says: assert
+nothing the given context doesn't support. A review that followed that rule would only restate its input —
+useless. So `review_system.md` says the opposite: the review's value is surfacing risks, unstated
+assumptions, and alternative framings the context does *not* already contain — but every added claim must
+still show its inferential step from something stated ("if X is true, then Y follows"), never assert an
+unverified fact about the world as settled truth. Inference from stated premises: encouraged. Fabricated
+evidence: never acceptable. The prompt is also explicit that this is advisory input, never a verdict —
+gating language ("approved", "rejected", "blocked") is out; hedged language ("recommend", "lean toward") is
+in. This mirrors how `CONTRACT.md` already treats Find/Validate: the decision stays with the driving agent
+or the human it serves, never with `relay` or the model provider. `CONTRACT.md` gains a "Review (independent
+critique)" section documenting all of this, including a recommendation (not enforced) to run the review
+through a different `--provider` than whatever produced the reasoning under review.
+
+Validated manually before this prompt existed: a real, still-open decision (should `relay` support the
+`openai-codex` provider?) was sent through the unmodified `spec draft` machinery as a stand-in, with a
+deliberately different provider than the original reasoning. It worked — surfaced real risks not in the
+input (account-suspension risk, a "mission drift" argument, a challenge to the stated economic premise)
+rather than just restating what it was given — which is what confirmed the need for this capability. But it
+was a misuse of a prompt whose core rule is backwards for this task, which is exactly why `review run` gets
+its own contract instead of reusing `spec draft`'s.
+
 ## 0.4.0 — OpenCode harness adapter
 
 Second concrete `CONTRACT.md` implementation, alongside the Claude Code skill:

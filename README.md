@@ -57,6 +57,19 @@ relay spec draft \
 # review DRAFT.md before saving/committing it anywhere
 ```
 
+Getting an independent critique of an architectural decision (also stateless, advisory only — never a
+gate; the decision stays with you):
+
+```bash
+relay review run \
+  --decision "should we adopt X? (include your stated reasoning here)" \
+  --context-file some/relevant/doc.md \
+  --provider opencode-go \
+  --output REVIEW.md
+# recommended: use a different --provider than whatever produced the reasoning under review, for
+# genuine independence
+```
+
 ## Use from a coding agent
 
 ```bash
@@ -82,6 +95,8 @@ gating, and the fixer-model call identically regardless of which harness is driv
 
 Phase 1: harness-neutral contract + Claude Code skill, ported from a validated POC. Phase 2: pluggable
 model connector, validated against two real providers (NIM + OpenCode Zen). Phase 3: Discover & Generate
-(`relay spec draft`) — spec authorship, not just fixing an existing finding. Second harness adapter (this
-release): OpenCode, drafted by `relay spec draft` itself and landed with `relay fix run` making the
-`cli.py` change against relay's own repo. See `CHANGELOG.md`.
+(`relay spec draft`) — spec authorship, not just fixing an existing finding. Second harness adapter:
+OpenCode, drafted by `relay spec draft` itself and landed with `relay fix run` making the `cli.py` change
+against relay's own repo. Review (this release): `relay review run` — independent critique of an
+architectural decision, advisory only, the decision gate stays human/driving-agent always. See
+`CHANGELOG.md`.
