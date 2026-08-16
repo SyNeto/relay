@@ -11,11 +11,14 @@ model connector gets abstracted across providers in a later phase.
 ## Install
 
 ```bash
-pipx install git+https://github.com/<org>/relay.git
+pipx install git+https://github.com/SyNeto/relay.git
 ```
 
 (`pipx` gives one global per-user install independent of any target project's own stack — target repos are
 not assumed to be Python projects.)
+
+This is a private repo — teammates installing it need their own GitHub access to `SyNeto/relay` configured
+(`gh auth login`, or SSH: `pipx install git+ssh://git@github.com/SyNeto/relay.git`).
 
 For local development:
 

@@ -12,7 +12,7 @@ is the condensed, Claude Code-specific version of it. If anything here and `CONT
 `CONTRACT.md` is authoritative.
 
 **Precondition.** Run `relay --version`. If the command isn't found, stop and tell the user how to install
-it (`pipx install git+<relay repo URL>`) — don't try to work around a missing install.
+it (`pipx install git+https://github.com/SyNeto/relay.git`) — don't try to work around a missing install.
 
 ## The two roles you own
 
