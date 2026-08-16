@@ -5,8 +5,8 @@ integration); it doesn't know or care which coding agent is driving it. See [`CO
 for the full protocol — roles, state model, finding schema, CLI surface — written to be reconstructible by
 any agent from that document alone.
 
-Two fixer-model providers are configured out of the box — NVIDIA NIM (`z-ai/glm-5.2`) and OpenCode Zen
-(`glm-5.2`) — selectable per `fix run` call via `--provider`. See CONTRACT.md's "Model connector" section
+Two model providers are configured out of the box — NVIDIA NIM (`z-ai/glm-5.2`) and OpenCode Zen
+(`glm-5.2`) — selectable per run via `--provider`. See CONTRACT.md's "Model connector" section
 for how to add another `openai-completions`-compatible provider without touching code.
 
 ## Install
@@ -36,13 +36,16 @@ API keys live outside the repo, never in code: NIM at `~/.secrets/.nvidia-api-ke
 
 ```bash
 relay run start my-run-1 --max-iterations 3 --gate-severities CRITICAL,HIGH
-echo '{"id": "f1", "severity": "HIGH", "summary": "...", "file": "docs/x.md",
-       "target_excerpt": "...", "failure_scenario": "..."}' | relay finding record my-run-1
+echo '[{"id": "f1", "severity": "HIGH", "summary": "...", "file": "docs/x.md",
+        "target_excerpt": "...", "failure_scenario": "..."},
+       {"id": "f2", "severity": "HIGH", "summary": "...", "file": "docs/y.md",
+        "target_excerpt": "...", "failure_scenario": "..."}]' | relay finding record my-run-1
 relay finding verify my-run-1 /path/to/target-repo
 relay fix run my-run-1 f1 /path/to/target-repo              # --provider defaults to nim
-relay fix run my-run-1 f1 /path/to/target-repo --provider opencode-go
-# review the printed diff, then:
+relay fix run my-run-1 f2 /path/to/target-repo --provider opencode-go
+# review the printed diffs, then:
 relay finding mark my-run-1 f1 fixed
+relay finding mark my-run-1 f2 fixed
 relay run status my-run-1
 ```
 
@@ -87,16 +90,10 @@ gating, and the fixer-model call identically regardless of which harness is driv
 - `CONTRACT.md` — the harness-neutral protocol spec (read this first)
 - `src/relay/engine/` — business logic: state machine, prompt building, fix application, verification
 - `src/relay/providers/` — model connector(s) + rate/quota tracking
-- `src/relay/prompts/` — fixer-model prompt templates
+- `src/relay/prompts/` — model prompt templates (fix, spec draft, review)
 - `src/relay/skills/` — per-harness integration templates (`relay skill install` copies from here)
 - `src/relay/cli.py` — the `relay` command
 
 ## Status
 
-Phase 1: harness-neutral contract + Claude Code skill, ported from a validated POC. Phase 2: pluggable
-model connector, validated against two real providers (NIM + OpenCode Zen). Phase 3: Discover & Generate
-(`relay spec draft`) — spec authorship, not just fixing an existing finding. Second harness adapter:
-OpenCode, drafted by `relay spec draft` itself and landed with `relay fix run` making the `cli.py` change
-against relay's own repo. Review (this release): `relay review run` — independent critique of an
-architectural decision, advisory only, the decision gate stays human/driving-agent always. See
-`CHANGELOG.md`.
+Active alpha. See `CHANGELOG.md` for release history and current phase.
