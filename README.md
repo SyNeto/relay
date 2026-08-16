@@ -35,7 +35,8 @@ API keys live outside the repo, never in code: NIM at `~/.secrets/.nvidia-api-ke
 ## Quickstart
 
 ```bash
-relay run start my-run-1 --max-iterations 3 --gate-severities CRITICAL,HIGH
+relay run start my-run-1 --max-iterations 3 --gate-severities CRITICAL,HIGH --spec-file SPEC.md
+relay repo setup my-run-1 /path/to/target-repo               # isolates work on branch relay/my-run-1
 echo '[{"id": "f1", "severity": "HIGH", "summary": "...", "file": "docs/x.md",
         "target_excerpt": "...", "failure_scenario": "..."},
        {"id": "f2", "severity": "HIGH", "summary": "...", "file": "docs/y.md",
@@ -46,8 +47,12 @@ relay fix run my-run-1 f2 /path/to/target-repo --provider opencode-go
 # review the printed diffs, then:
 relay finding mark my-run-1 f1 fixed
 relay finding mark my-run-1 f2 fixed
+relay repo commit my-run-1 /path/to/target-repo             # commits just f1/f2's files
 relay run status my-run-1
 ```
+
+(`--spec-file` and `repo setup`/`repo commit` are both optional — the loop works the same without them,
+tracking a run's spec and handling git plumbing entirely by hand instead.)
 
 Drafting a new spec document (Discover/Generate — stateless, no run needed):
 
@@ -89,7 +94,7 @@ model calls identically regardless of which harness is driving it.
 ## Layout
 
 - `CONTRACT.md` — the harness-neutral protocol spec (read this first)
-- `src/relay/engine/` — business logic: state machine, prompt building, fix application, verification
+- `src/relay/engine/` — business logic: state machine, prompt building, fix application, verification, local repo plumbing
 - `src/relay/providers/` — model connector(s) + rate/quota tracking
 - `src/relay/prompts/` — model prompt templates (fix, spec draft, review)
 - `src/relay/skills/` — per-harness integration templates (`relay skill install` copies from here)
@@ -97,4 +102,6 @@ model calls identically regardless of which harness is driving it.
 
 ## Status
 
-Active alpha. See `CHANGELOG.md` for release history and current phase.
+Active alpha, with local git plumbing (branch isolation, scoped commits) and run→spec traceability as of
+this release. Pushing, pull requests, and merging are still entirely manual — deliberately deferred. See
+`CHANGELOG.md` for release history and current phase.

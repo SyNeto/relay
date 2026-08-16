@@ -18,7 +18,7 @@ is the load-bearing design decision, not an implementation detail:
 | **Find** | the driving agent | No — reading the target and deciding what's wrong is judgment |
 | **Fix** | the configured model provider, via `relay fix run` | Yes — mechanized, one finding in, one diff out |
 | **Validate** | the driving agent | No — reading the diff `relay fix run` produced and deciding accept/reject/hand-fix is judgment |
-| **Commit** | the driving agent, via plain `git` | Judged action, mechanical execution |
+| **Commit** | the driving agent, via `relay repo setup`/`relay repo commit` or plain `git` | Partially — mechanics (branch, staging, message) are mechanized; deciding *when* to commit, and that this iteration's work is actually done, stays judgment |
 | **Check** | `relay run status` | Yes — pure function of recorded finding statuses |
 
 **Fix and Validate must never be the same actor.** A model that both proposes and accepts its own fix has
@@ -29,9 +29,12 @@ model that produced the Fix — reintroduces exactly the failure mode this loop 
 
 ## Sequence (one iteration)
 
-1. **Start.** `relay run start <run_id> [--max-iterations N] [--gate-severities LIST]`. `gate_severities`
-   and `max_iterations` are fixed at first creation of a run — later calls with the same `run_id` just
-   advance the iteration counter.
+1. **Start.** `relay run start <run_id> [--max-iterations N] [--gate-severities LIST] [--spec-file PATH]`.
+   `gate_severities`, `max_iterations`, and `spec_file` are fixed at first creation of a run — later calls
+   with the same `run_id` just advance the iteration counter. Right after Start, while the target repo's
+   tree is still clean, `relay repo setup <run_id> <target_repo_root> [--branch NAME]` can isolate this
+   run's work on a dedicated branch (default `relay/<run_id>`) before Find/Fix touch anything — see
+   "Repository management" below.
 2. **Find.** The driving agent reviews the target (files, code, whatever the run's domain is) and records
    what it finds — one JSON object per finding, via `relay finding record <run_id>` (stdin or
    `--from-json`). See "Finding schema" below for the required shape. This step is 100% agent judgment;
@@ -50,9 +53,11 @@ model that produced the Fix — reintroduces exactly the failure mode this loop 
      finding against the same bad prompt.
    - the model may also correctly decline (see "CANNOT_FIX" below) — that's not a bug to route around by
      loosening its instructions mid-run; do the fix by hand if it's simple, or reconsider the finding.
-6. **Commit.** In the target repo: one commit per iteration, on a dedicated branch/worktree so the
-   project's main branch stays untouched until the run is reviewed. This is a plain `git` step — `relay`
-   does not wrap it.
+6. **Commit.** Once this iteration's fixes are validated: `relay repo commit <run_id> <target_repo_root>
+   [-m TEXT]` — stages and commits exactly the files belonging to this run's `fixed` findings that are
+   still dirty, refusing loudly if that set is empty. The driving agent may still do this entirely by hand
+   with plain `git` instead — `repo commit` is a convenience for the common case, not a requirement. See
+   "Repository management" below for exactly how the file selection and commit message are built.
 7. **Check.** `relay run status <run_id>` prints the current state and whether the run should stop. If not
    stopping and `iteration < max_iterations`: go to step 1 for the next iteration. If stopping: report the
    final state — either a clean pass on the gated severities, or the max-iteration cutoff with whatever's
@@ -68,6 +73,7 @@ Fields:
 | `run_id` | string | |
 | `max_iterations` | int | fixed at creation |
 | `gate_severities` | list of severity strings | fixed at creation — which severities gate the exit condition |
+| `spec_file` | string or null | optional, fixed at creation — path to the spec document (e.g. from `relay spec draft --output`) that drove this run, for traceability; not validated to exist or be readable |
 | `iteration` | int | current iteration number, starts at 0, incremented by `run start` |
 | `phase` | string | one of `find`, `fix`, `validate`, `commit` — set by the CLI subcommand currently in use, informational |
 | `findings` | list of finding records | see schema below |
@@ -234,12 +240,62 @@ and enough surrounding material to check that reasoning's consistency. Poor subj
 decision (produces after-the-fact rationalization, not useful input), a too-vague question with no stated
 reasoning to critique, or one-sided context that omits alternatives already considered.
 
+## Repository management
+
+`relay repo setup` and `relay repo commit` mechanize the branch-and-commit mechanics of the Commit role
+(see Roles above) — deciding *when* to invoke them stays with the driving agent, same as every other
+explicit `relay` subcommand. Both operate purely on local git state — no remote, no PR, no merge; the loop
+hands the run's finished branch back to the driving agent (or the human it serves) to push, review, and
+merge by whatever process the target repo already uses. Pushing, opening a pull request, and merging are
+explicitly out of scope for this cut, deferred to a later "glue" design.
+
+**`relay repo setup <run_id> <target_repo_root> [--branch NAME]`** — idempotent. Ensures a dedicated branch
+(default `relay/<run_id>`) exists and is checked out:
+- already on the target branch: no-op.
+- target branch doesn't exist: create it from the current HEAD and check it out.
+- target branch exists but isn't checked out: check it out.
+- working tree is dirty *and* not already on the target branch: refuse — never silently switches branches
+  over uncommitted work. (Dirty while already on the target branch is fine — that's the normal
+  in-progress state during Fix/Validate.)
+
+Run this right after Start, while the tree is still clean — not after Fix has already made changes, since
+the dirty-tree refusal above would then correctly block it.
+
+**If `--state-dir`'s default (`./.relay/runs`, relative to wherever `relay` is invoked from) resolves to
+somewhere inside `target_repo_root`**, that directory shows up as untracked in `git status` like anything
+else — the dirty-tree checks above have no special-case awareness of it. Either gitignore `.relay/` in the
+target repo (the convention `relay`'s own repo already follows), or pass `--state-dir` pointing outside
+`target_repo_root`, so run state itself never trips a dirty-tree refusal.
+
+**`relay repo commit <run_id> <target_repo_root> [-m TEXT]`** — stages and commits exactly the files this
+run is responsible for, nothing else:
+1. The *fixed-finding file set*: the `file` of every finding in the run whose `status` is `fixed`.
+2. The *dirty set*: every path git currently reports as changed (staged, unstaged, or untracked).
+3. Stages and commits their **intersection** — one `git add` naming every path explicitly, never
+   `git add -A`/`-u`. Files outside the intersection are left untouched.
+4. Refuses loudly (non-zero exit, no commit attempted) if the intersection is empty.
+
+This deliberately does not use the finding's `iteration` field — `record_finding` stamps it once, at Find
+time, and never updates it, so a finding recorded in iteration 1 but not fixed until iteration 3 would
+misreport as iteration-1 work forever. Scoping by status + live dirty-state instead means the set is always
+correct for "whatever hasn't been committed yet," with no new bookkeeping field required. It also doesn't
+depend on *how* a finding was fixed: a finding fixed by `relay fix run`, and one fixed entirely by hand (per
+Validate's "fix it by hand if it's simple" guidance) and marked `fixed` via `relay finding mark`, are
+indistinguishable to this algorithm — both are `status: fixed` findings whose `file` is dirty, so both are
+picked up identically.
+
+Commit message: an auto-generated body listing each committed finding's `id`, `severity`, and `summary`
+(one line each), plus a `Spec-File: <path>` trailer if the run's `spec_file` is set. `-m TEXT` replaces only
+the headline; the structured finding list and `Spec-File:` trailer are still generated and appended. After
+committing, any dirty files outside the committed set (e.g. a fix that required touching a second, unlisted
+file) are printed as a note — left for the driving agent to handle, not silently dropped.
+
 ## CLI surface
 
 Every harness implementation drives the loop through exactly these subcommands — this is the contract's
 enforcement point. A harness integration should never need to touch `relay`'s internals directly.
 
-- `relay run start <run_id> [--max-iterations N] [--gate-severities LIST]` — `LIST` is
+- `relay run start <run_id> [--max-iterations N] [--gate-severities LIST] [--spec-file PATH]` — `LIST` is
   comma-separated with no spaces, e.g. `--gate-severities CRITICAL,HIGH`
 - `relay run status <run_id>`
 - `relay finding record <run_id> [--from-json PATH]` (JSON object or array; also accepts stdin)
@@ -248,6 +304,8 @@ enforcement point. A harness integration should never need to touch `relay`'s in
 - `relay fix run <run_id> <finding_id> <target_repo_root> [--timeout SECONDS] [--provider NAME]`
 - `relay spec draft --request TEXT --context-file PATH [--context-file PATH ...] [--provider NAME] [--timeout SECONDS] [--output PATH] [--force]`
 - `relay review run --decision TEXT --context-file PATH [--context-file PATH ...] [--provider NAME] [--timeout SECONDS] [--output PATH] [--force]`
+- `relay repo setup <run_id> <target_repo_root> [--branch NAME]`
+- `relay repo commit <run_id> <target_repo_root> [-m TEXT]`
 - `relay quota status [--provider NAME]`
 - `relay skill install --harness <name> [--target-dir PATH]`
 
@@ -257,7 +315,18 @@ Run any subcommand with `--help` for exact flags. State lives under `--state-dir
 
 ## Evidence convention
 
-One commit per iteration in the target repo, on a dedicated branch/worktree so the project's default branch
-stays untouched until the run is reviewed and merged. This is intentionally a manual `git` step, not a
-`relay` subcommand — the loop should never commit on the driving agent's behalf without that agent's
-explicit action.
+`relay repo setup` and `relay repo commit` mechanize the branch-and-commit mechanics described in Sequence
+step 6 — but only when the driving agent explicitly invokes them. Nothing else in this contract triggers a
+commit as a side effect: `relay fix run`, `relay finding mark`, and every other subcommand touch only
+working-tree files or run state, never git history. The guarantee this section has always stated is
+unchanged: `relay` never commits on the driving agent's behalf without that agent's explicit action —
+invoking `repo commit` *is* that explicit action, the same way invoking `fix run` is the explicit action
+that applies a fix. The driving agent may still do this entirely by hand with plain `git` instead, at its
+discretion; `relay repo commit` is a convenience for the common case, not a requirement.
+
+One commit per iteration in the target repo, on a dedicated branch (`relay repo setup`, default branch name
+`relay/<run_id>`) so the project's default branch stays untouched until the run is reviewed and merged.
+`relay repo commit` stages and commits only the files belonging to this run's `fixed` findings that git
+still reports as dirty — see "Repository management" above for exactly how that set is computed. Out of
+scope for both commands, deferred to a later design: pushing, opening or merging a pull request, or any
+interaction with a remote.

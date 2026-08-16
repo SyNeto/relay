@@ -45,6 +45,7 @@ class RunState:
         run_id: str,
         max_iterations: int = 3,
         gate_severities: tuple = DEFAULT_GATE_SEVERITIES,
+        spec_file: str | None = None,
         state_dir: Path | None = None,
     ):
         state_dir = state_dir or default_state_dir()
@@ -56,6 +57,7 @@ class RunState:
                 "run_id": run_id,
                 "max_iterations": max_iterations,
                 "gate_severities": list(gate_severities),
+                "spec_file": spec_file,
                 "started_at": time.time(),
                 "iteration": 0,
                 "phase": "find",
@@ -63,6 +65,7 @@ class RunState:
             }
         self.__dict__.update(data)
         self.gate_severities = tuple(self.gate_severities)  # stored as list in JSON
+        self.spec_file = getattr(self, "spec_file", None)  # back-compat: pre-spec_file state.json
 
     def _save(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -131,9 +134,10 @@ class RunState:
             f"Iteration {_bar(self.iteration, self.max_iterations)} "
             f"{self.iteration}/{self.max_iterations}   "
             f"Phase: {self.phase}   Elapsed: {elapsed}",
-            "",
-            "Findings",
         ]
+        if self.spec_file:
+            lines.append(f"Spec: {self.spec_file}")
+        lines += ["", "Findings"]
         by_sev = {}
         for f in self.findings:
             by_sev.setdefault(f["severity"], []).append(f)
