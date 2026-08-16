@@ -79,6 +79,17 @@ relay review run \
 # genuine independence
 ```
 
+Or as a closing check once a run's fix loop reaches a clean gate — comparing the finished diff back against
+the spec that motivated it, diff gathered automatically instead of hand-assembled:
+
+```bash
+relay review run \
+  --decision "does this diff actually deliver on the spec?" \
+  --context-file SPEC.md \
+  --diff-from-branch main --target-repo-root /path/to/target-repo \
+  --output CLOSING_REVIEW.md
+```
+
 ## Use from a coding agent
 
 ```bash

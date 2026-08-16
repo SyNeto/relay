@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.8.0 — `relay review run --diff-from-branch`
+
+Makes the "closing check" pattern (already described in the skill files' fuzzy-idea playbook — re-run
+`review run` after a fix loop's clean gate, asking whether the implementation still matches the spec) less
+manual: `--diff-from-branch <branch> --target-repo-root <path>` gathers `git diff <branch>...HEAD` (the
+merge-base diff — only what changed on the current branch, not unrelated changes made on `<branch>` after
+the fork point) as one context item automatically, instead of the driving agent hand-assembling a summary
+of what changed.
+
+New `engine.repo.diff_against(repo_root, base_branch) -> str`, same fail-loudly `RepoError` discipline as
+the rest of that module. `--context-file` is no longer `required=True` at the argparse level — `cmd_review_run`
+now requires at least one of `--context-file`/`--diff-from-branch`, checked after both are gathered so the
+error message covers either path; the two may be combined (e.g. the spec file plus the diff). Empty diffs
+don't silently produce an empty context item — a note is printed and the context item reads `(no changes)`,
+since `build_review_prompt.build()` already rejects context items with empty content.
+
+CONTRACT.md's "Review" section gains the flag's mechanics and a new closing-check example under "What makes
+a good subject for review"; README and both skill files' closing-check step now show the concrete command
+instead of the previous vague "with a summary of what actually changed."
+
+Validated live end to end: a scratch repo with a real feature-branch diff, `review run --diff-from-branch`
+against it, confirmed the review's content specifically engaged with the diff's actual change (not just
+generic advice) — plus both new CLI error paths (missing context entirely, `--diff-from-branch` without
+`--target-repo-root`) fail before any provider lookup or model call.
+
 ## 0.7.0 — `relay run list`
 
 Visibility across multiple in-flight runs: `relay run list [--state-dir PATH]` enumerates every `run_id`

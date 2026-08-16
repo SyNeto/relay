@@ -205,6 +205,14 @@ inverted grounding rule, because a critique's job is the opposite of a document 
 Input shape: `{"decision": str, "context": [{"source": str, "content": str}, ...]}` — mirrors the
 `spec draft` request shape field-for-field, with `decision` in place of `change_request`.
 
+`--diff-from-branch <branch> --target-repo-root <path>` gathers one context item automatically: `git diff
+<branch>...HEAD` (the merge-base diff — only what changed on the current branch since diverging from
+`<branch>`, not unrelated changes made on `<branch>` afterward) from `target_repo_root`, run through
+`engine/repo.py`'s `diff_against`. This exists for the closing check described in "What makes a good subject
+for review" below — comparing a finished run's actual diff back against the spec that motivated it, without
+the driving agent hand-assembling a summary of what changed. At least one of `--context-file`/
+`--diff-from-branch` is required, and both may be combined (e.g. the spec file plus the diff).
+
 Model-response envelope:
 
 ```
@@ -243,6 +251,11 @@ Recommended (not enforced — `relay` has no way to track provenance): run the r
 and enough surrounding material to check that reasoning's consistency. Poor subjects: an already-executed
 decision (produces after-the-fact rationalization, not useful input), a too-vague question with no stated
 reasoning to critique, or one-sided context that omits alternatives already considered.
+
+One good subject is still-open even after a fix loop reaches a clean gate: whether the finished
+implementation actually matches the intent that motivated it. `--diff-from-branch` exists for exactly this
+closing check — the decision under review becomes "does this diff actually deliver on the spec," with the
+spec (e.g. via `--context-file`) and the diff (via `--diff-from-branch`) as the supporting context.
 
 ## Repository management
 
@@ -308,7 +321,7 @@ enforcement point. A harness integration should never need to touch `relay`'s in
 - `relay finding mark <run_id> <finding_id> <status>`
 - `relay fix run <run_id> <finding_id> <target_repo_root> [--timeout SECONDS] [--provider NAME]`
 - `relay spec draft --request TEXT --context-file PATH [--context-file PATH ...] [--provider NAME] [--timeout SECONDS] [--output PATH] [--force]`
-- `relay review run --decision TEXT --context-file PATH [--context-file PATH ...] [--provider NAME] [--timeout SECONDS] [--output PATH] [--force]`
+- `relay review run --decision TEXT [--context-file PATH ...] [--diff-from-branch BRANCH --target-repo-root PATH] [--provider NAME] [--timeout SECONDS] [--output PATH] [--force]` — at least one of `--context-file`/`--diff-from-branch` required
 - `relay repo setup <run_id> <target_repo_root> [--branch NAME]`
 - `relay repo commit <run_id> <target_repo_root> [-m TEXT]`
 - `relay quota status [--provider NAME]`

@@ -19,6 +19,7 @@ from relay.engine.repo import (
     RepoError,
     build_commit_message,
     checkout_or_create_branch,
+    diff_against,
     dirty_files,
     select_files_to_commit,
     stage_and_commit,
@@ -232,8 +233,32 @@ def cmd_review_run(args):
         sys.exit(1)
 
     context = [
-        {"source": path, "content": Path(path).read_text()} for path in args.context_file
+        {"source": path, "content": Path(path).read_text()} for path in (args.context_file or [])
     ]
+
+    if args.diff_from_branch:
+        if not args.target_repo_root:
+            print("--diff-from-branch requires --target-repo-root", file=sys.stderr)
+            sys.exit(2)
+        try:
+            diff = diff_against(args.target_repo_root, args.diff_from_branch)
+        except RepoError as e:
+            print(str(e), file=sys.stderr)
+            sys.exit(1)
+        if not diff.strip():
+            print(
+                f"note: no diff between {args.diff_from_branch!r} and HEAD in {args.target_repo_root}",
+                file=sys.stderr,
+            )
+        context.append({
+            "source": f"git diff {args.diff_from_branch}...HEAD",
+            "content": diff or "(no changes)",
+        })
+
+    if not context:
+        print("review run needs at least one --context-file or --diff-from-branch", file=sys.stderr)
+        sys.exit(2)
+
     prompt = build_review({"decision": args.decision, "context": context})
 
     print(f"calling {provider_config.name} (timeout={args.timeout}s)...", file=sys.stderr)
@@ -448,9 +473,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--context-file",
         action="append",
-        required=True,
+        default=None,
         dest="context_file",
-        help="path to a context file; repeatable, at least one required",
+        help="path to a context file; repeatable. At least one of --context-file/--diff-from-branch required",
+    )
+    p.add_argument(
+        "--diff-from-branch",
+        default=None,
+        help="include `git diff <branch>...HEAD` from --target-repo-root as context "
+        "(e.g. the run's base branch, for a closing check comparing implementation against intent)",
+    )
+    p.add_argument(
+        "--target-repo-root", type=Path, default=None, help="required with --diff-from-branch"
     )
     p.add_argument("--provider", default="nim", help="which configured provider to review with (default: nim)")
     p.add_argument("--timeout", type=float, default=openai_compat_client.DEFAULT_TIMEOUT)
