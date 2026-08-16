@@ -9,6 +9,7 @@ from relay.engine.repo import (
     build_commit_message,
     checkout_or_create_branch,
     current_branch,
+    diff_against,
     dirty_files,
     is_dirty,
     select_files_to_commit,
@@ -180,3 +181,49 @@ def test_build_commit_message_summary_override_replaces_only_headline():
     assert lines[0] == "custom headline"
     assert "- f1 [HIGH] fixed the thing" in message
     assert "Spec-File: docs/SPEC.md" in message
+
+
+def test_diff_against_shows_changes_since_divergence(tmp_path: Path):
+    repo = _git_repo(tmp_path)
+    base = current_branch(repo)
+    checkout_or_create_branch(repo, "feature")
+    (repo / "a.md").write_text("changed on feature\n")
+    stage_and_commit(repo, ["a.md"], "feature commit")
+
+    diff = diff_against(repo, base)
+
+    assert "changed on feature" in diff
+    assert "-original a" in diff
+
+
+def test_diff_against_empty_when_no_changes(tmp_path: Path):
+    repo = _git_repo(tmp_path)
+    base = current_branch(repo)
+    checkout_or_create_branch(repo, "feature")
+
+    assert diff_against(repo, base) == ""
+
+
+def test_diff_against_ignores_unrelated_changes_on_base_after_fork(tmp_path: Path):
+    repo = _git_repo(tmp_path)
+    base = current_branch(repo)
+    checkout_or_create_branch(repo, "feature")
+    (repo / "a.md").write_text("changed on feature\n")
+    stage_and_commit(repo, ["a.md"], "feature commit")
+
+    checkout_or_create_branch(repo, base)
+    (repo / "unrelated.md").write_text("added on base after fork\n")
+    stage_and_commit(repo, ["unrelated.md"], "unrelated base commit")
+    checkout_or_create_branch(repo, "feature")
+
+    diff = diff_against(repo, base)
+
+    assert "changed on feature" in diff
+    assert "unrelated" not in diff
+
+
+def test_diff_against_raises_on_unknown_branch(tmp_path: Path):
+    repo = _git_repo(tmp_path)
+
+    with pytest.raises(RepoError):
+        diff_against(repo, "does-not-exist")

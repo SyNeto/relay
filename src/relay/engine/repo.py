@@ -38,6 +38,18 @@ def is_dirty(repo_root: Path) -> bool:
     return bool(result.stdout.strip())
 
 
+def diff_against(repo_root: Path, base_branch: str) -> str:
+    """`git diff <base_branch>...HEAD` -- the changes introduced by HEAD
+    since diverging from base_branch (merge-base diff), not a raw
+    two-way diff, which would also pick up unrelated changes made on
+    base_branch after the fork point. Raises RepoError if base_branch
+    doesn't exist or the diff otherwise fails."""
+    result = _run(repo_root, ["diff", f"{base_branch}...HEAD"])
+    if result.returncode != 0:
+        raise RepoError(f"git diff {base_branch}...HEAD failed in {repo_root}: {result.stderr.strip()}")
+    return result.stdout
+
+
 def dirty_files(repo_root: Path) -> set[str]:
     """Paths git currently reports as dirty (staged, unstaged, or
     untracked) in repo_root, relative to repo_root -- same convention
