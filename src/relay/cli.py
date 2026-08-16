@@ -211,15 +211,22 @@ def cmd_quota_status(args):
         print(RpmLimiter("cli", provider=name).report())
 
 
+_HARNESS_INSTALL = {
+    "claude-code": ("skills/claude-code/SKILL.md", ".claude/skills/relay", "SKILL.md"),
+    "opencode": ("skills/opencode/AGENT.md", ".opencode/agents", "relay.md"),
+}
+
+
 def cmd_skill_install(args):
-    if args.harness != "claude-code":
-        print(f"unsupported harness {args.harness!r} — only 'claude-code' is packaged today")
+    if args.harness not in _HARNESS_INSTALL:
+        print(f"unsupported harness {args.harness!r}")
         sys.exit(2)
 
-    src = resources.files("relay") / "skills" / "claude-code" / "SKILL.md"
-    target_dir = Path(args.target_dir) / ".claude" / "skills" / "relay"
+    src_rel, target_subdir, target_filename = _HARNESS_INSTALL[args.harness]
+    src = resources.files("relay") / src_rel
+    target_dir = Path(args.target_dir) / target_subdir
     target_dir.mkdir(parents=True, exist_ok=True)
-    dest = target_dir / "SKILL.md"
+    dest = target_dir / target_filename
 
     if dest.exists() and args.force is False:
         header = dest.read_text().splitlines()[:10]
@@ -313,7 +320,7 @@ def build_parser() -> argparse.ArgumentParser:
         dest="skill_command", required=True
     )
     p = skill.add_parser("install", help="install a packaged skill/agent template into a project")
-    p.add_argument("--harness", required=True, choices=["claude-code"])
+    p.add_argument("--harness", required=True, choices=["claude-code", "opencode"])
     p.add_argument("--target-dir", default=".")
     p.add_argument("--force", action="store_true")
     p.set_defaults(func=cmd_skill_install)

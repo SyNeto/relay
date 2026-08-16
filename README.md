@@ -57,15 +57,17 @@ relay spec draft \
 # review DRAFT.md before saving/committing it anywhere
 ```
 
-## Use from Claude Code
+## Use from a coding agent
 
 ```bash
 relay skill install --harness claude-code --target-dir /path/to/your/project
+relay skill install --harness opencode --target-dir /path/to/your/project
 ```
 
-Installs a skill at `<project>/.claude/skills/relay/SKILL.md` that teaches Claude how to drive the loop
-above — Find and Validate stay agent judgment calls, `relay` handles state, gating, and the fixer-model
-call.
+Installs a harness-native integration file — `<project>/.claude/skills/relay/SKILL.md` for Claude Code, or
+`<project>/.opencode/agents/relay.md` (an OpenCode subagent) for OpenCode — that teaches the agent how to
+drive the loop above. Find and Validate stay agent judgment calls either way; `relay` handles state,
+gating, and the fixer-model call identically regardless of which harness is driving it.
 
 ## Layout
 
@@ -79,6 +81,7 @@ call.
 ## Status
 
 Phase 1: harness-neutral contract + Claude Code skill, ported from a validated POC. Phase 2: pluggable
-model connector, validated against two real providers (NIM + OpenCode Zen). Phase 3 (this release):
-Discover & Generate (`relay spec draft`) — spec authorship, not just fixing an existing finding. Not yet
-done: a second harness adapter (only Claude Code is packaged today). See `CHANGELOG.md`.
+model connector, validated against two real providers (NIM + OpenCode Zen). Phase 3: Discover & Generate
+(`relay spec draft`) — spec authorship, not just fixing an existing finding. Second harness adapter (this
+release): OpenCode, drafted by `relay spec draft` itself and landed with `relay fix run` making the
+`cli.py` change against relay's own repo. See `CHANGELOG.md`.

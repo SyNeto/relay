@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.4.0 — OpenCode harness adapter
+
+Second concrete `CONTRACT.md` implementation, alongside the Claude Code skill:
+`relay skill install --harness opencode` installs `src/relay/skills/opencode/AGENT.md` — an OpenCode
+subagent (`mode: subagent`, `permission: {edit: deny, bash: deny}`) — to
+`<project>/.opencode/agents/relay.md`. `cli.py`'s `cmd_skill_install` moved from a hardcoded
+claude-code-only check to a `_HARNESS_INSTALL` dispatch table keyed by harness name; `--harness` now
+accepts `claude-code` or `opencode`.
+
+Produced end to end using relay on itself: `relay spec draft` generated the adapter content and the
+`cli.py` change as a reviewed spec (0.3.0's dogfood run — see below); the two `cli.py` findings from that
+spec (the hardcoded harness check, the argparse `choices` list) were then landed for real via
+`relay fix run` against relay's own repo, reviewed, and marked fixed through the same Find/Fix/Validate
+loop this tool runs for any other target. Two defects the dogfood run's Validate step had already caught
+in the draft (a stray malformed trailing artifact, a stale hardcoded version stamp copied from the
+reference file) were corrected by hand before the file was saved — see the 0.3.0 entry for what those
+were; neither reached this release.
+
+Not verified: the OpenCode frontmatter schema and `permission.bash: deny` behavior against a real
+`opencode` install (no `opencode` binary available in this environment) — flagged explicitly in the
+shipped file itself, not silently assumed correct.
+
 ## 0.3.0 — Phase 3
 
 Discover & Generate: spec authorship, not just fixing an existing finding. New `relay spec draft
