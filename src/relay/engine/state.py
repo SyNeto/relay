@@ -27,6 +27,16 @@ def default_state_dir() -> Path:
     return Path.cwd() / ".relay" / "runs"
 
 
+def list_run_ids(state_dir: Path | None = None) -> list[str]:
+    """Every run_id with a state.json under state_dir, sorted. Since the
+    convention is a date-prefixed run_id (YYYY-MM-DD-runN), alphabetical
+    sort is also chronological for same-day runs."""
+    state_dir = Path(state_dir) if state_dir else default_state_dir()
+    if not state_dir.exists():
+        return []
+    return sorted(p.parent.name for p in state_dir.glob("*/state.json"))
+
+
 def _bar(current: int, total: int, width: int = 10) -> str:
     filled = int(width * current / total) if total else 0
     filled = max(0, min(width, filled))
@@ -126,6 +136,16 @@ class RunState:
         if self.iteration >= self.max_iterations:
             return True
         return self.iteration > 0 and self.gate_clean()
+
+    def summary_line(self) -> str:
+        """One line per run, for `relay run list` — the condensed
+        counterpart to render()'s full multi-line detail."""
+        gate = "CLEAN" if self.gate_clean() else "NOT CLEAN"
+        spec = self.spec_file or "-"
+        return (
+            f"{self.run_id:<24} iter {self.iteration}/{self.max_iterations}   "
+            f"phase={self.phase:<8} gate={gate:<9} spec={spec}"
+        )
 
     def render(self) -> str:
         elapsed = _fmt_elapsed(time.time() - self.started_at)

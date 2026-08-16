@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "relay"
-version = "0.6.1"
+version = "0.7.0"
 description = "Harness-neutral find -> fix -> validate quality loop engine"
 readme = "README.md"
 requires-python = ">=3.10"

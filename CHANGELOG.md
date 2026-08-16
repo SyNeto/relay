@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.7.0 — `relay run list`
+
+Visibility across multiple in-flight runs: `relay run list [--state-dir PATH]` enumerates every `run_id`
+with a state file under `state_dir` and prints one summary line each (iteration, phase, gate status,
+`spec_file` if set) — previously the only way to find a run's `run_id` to resume it, or see what's in
+flight on a machine, was remembering it.
+
+New `engine.state.list_run_ids(state_dir=None) -> list[str]`: scans `state_dir` for `*/state.json`,
+returns sorted run_ids (alphabetical sort is also chronological, given the `YYYY-MM-DD-runN` convention).
+New `RunState.summary_line()`, the condensed one-line counterpart to the existing multi-line `render()`.
+CONTRACT.md's State model section gains a short "Discovering runs" note; CLI surface gains the bullet.
+
 ## 0.6.1 — Skill coverage for repo management
 
 Fast-follow explicitly deferred at the end of 0.6.0: that release's skill-file change was a surgical fix to

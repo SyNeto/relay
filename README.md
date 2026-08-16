@@ -49,6 +49,7 @@ relay finding mark my-run-1 f1 fixed
 relay finding mark my-run-1 f2 fixed
 relay repo commit my-run-1 /path/to/target-repo             # commits just f1/f2's files
 relay run status my-run-1
+relay run list                                               # every run under --state-dir, at a glance
 ```
 
 (`--spec-file` and `repo setup`/`repo commit` are both optional — the loop works the same without them,
