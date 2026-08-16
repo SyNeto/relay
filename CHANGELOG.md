@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.5.1 — Skill coverage for spec draft and review run
+
+Fast-follow on a gap left open by both 0.3.0 (Discover & Generate) and 0.5.0 (Review): the packaged
+`SKILL.md`/`AGENT.md` templates only ever taught the driving agent about the find -> fix -> validate loop.
+An agent starting cold from `relay skill install` had no way to discover `relay spec draft` or
+`relay review run` existed, let alone how to sequence them — so "supervise a spec from ideation through
+execution" wasn't actually something the skill enabled, regardless of what the CLI could do.
+
+Both templates gain: a capabilities table (all three commands, stateful or not, one-liner each); a
+"when the user brings you a fuzzy idea" playbook — clarify -> optional decision review (different
+`--provider` recommended, advisory only) -> spec draft (reviewed before saving) -> decompose into findings
+-> execute the existing loop -> optional closing review comparing the finished diff back against the
+original spec for larger work; and a Notes entry naming all three response envelopes (`FIXED_EXCERPT`/
+`CANNOT_FIX`, `SPEC_DRAFT`/`INSUFFICIENT_CONTEXT`, `REVIEW`) so a hard-fail on a malformed response reads as
+intentional, not a bug to route around. Both skill frontmatter `description` fields were broadened to match
+— skill/subagent auto-invocation is description-driven, so a driving agent asked to "get an independent
+review of this decision" or "draft a spec for X" wouldn't have surfaced this skill under the old, fix-loop-
+only description. No CLI or `CONTRACT.md` changes — the underlying capabilities already existed; this
+closes the gap in what a driving agent starting from the skill alone can discover about them. Also caught
+and fixed: both templates' own version stamps were still `v0.4.0`, one release behind.
+
 ## 0.5.0 — Review (independent critique)
 
 Fourth capability, alongside Fix (excerpt correction) and Generate (document drafting): `relay review run

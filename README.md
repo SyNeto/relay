@@ -81,9 +81,10 @@ relay skill install --harness opencode --target-dir /path/to/your/project
 ```
 
 Installs a harness-native integration file — `<project>/.claude/skills/relay/SKILL.md` for Claude Code, or
-`<project>/.opencode/agents/relay.md` (an OpenCode subagent) for OpenCode — that teaches the agent how to
-drive the loop above. Find and Validate stay agent judgment calls either way; `relay` handles state,
-gating, and the fixer-model call identically regardless of which harness is driving it.
+`<project>/.opencode/agents/relay.md` (an OpenCode subagent) for OpenCode — that teaches the agent the full
+lifecycle above: an optional decision review, drafting a spec, then driving the fix loop. Find, Validate,
+and every decision stay agent (or human) judgment calls throughout; `relay` handles state, gating, and the
+model calls identically regardless of which harness is driving it.
 
 ## Layout
 
