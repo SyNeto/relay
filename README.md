@@ -5,8 +5,9 @@ integration); it doesn't know or care which coding agent is driving it. See [`CO
 for the full protocol — roles, state model, finding schema, CLI surface — written to be reconstructible by
 any agent from that document alone.
 
-Today's fixer model is NVIDIA NIM (`z-ai/glm-5.2`) — that's a placeholder, not a design commitment; the
-model connector gets abstracted across providers in a later phase.
+Two fixer-model providers are configured out of the box — NVIDIA NIM (`z-ai/glm-5.2`) and OpenCode Zen
+(`glm-5.2`) — selectable per `fix run` call via `--provider`. See CONTRACT.md's "Model connector" section
+for how to add another `openai-completions`-compatible provider without touching code.
 
 ## Install
 
@@ -27,8 +28,9 @@ python3 -m venv .venv
 .venv/bin/pip install -e ".[dev]"
 ```
 
-API key for the model provider lives at `~/.secrets/.nvidia-api-key` (chmod 600) — never in the repo or in
-code.
+API keys live outside the repo, never in code: NIM at `~/.secrets/.nvidia-api-key`, OpenCode Zen at
+`~/.secrets/.opencode-api-key` (both chmod 600). Add a third provider (or override these paths) via
+`~/.relay/providers.json` — see CONTRACT.md.
 
 ## Quickstart
 
@@ -37,7 +39,8 @@ relay run start my-run-1 --max-iterations 3 --gate-severities CRITICAL,HIGH
 echo '{"id": "f1", "severity": "HIGH", "summary": "...", "file": "docs/x.md",
        "target_excerpt": "...", "failure_scenario": "..."}' | relay finding record my-run-1
 relay finding verify my-run-1 /path/to/target-repo
-relay fix run my-run-1 f1 /path/to/target-repo
+relay fix run my-run-1 f1 /path/to/target-repo              # --provider defaults to nim
+relay fix run my-run-1 f1 /path/to/target-repo --provider opencode-go
 # review the printed diff, then:
 relay finding mark my-run-1 f1 fixed
 relay run status my-run-1
@@ -64,6 +67,6 @@ call.
 
 ## Status
 
-Phase 1 (this release): harness-neutral contract + Claude Code skill, ported from a validated POC.
-Not yet done: model-provider abstraction (still NIM-only), spec-*generation* specialization (still
-fix-existing-findings only). See `CHANGELOG.md`.
+Phase 1: harness-neutral contract + Claude Code skill, ported from a validated POC. Phase 2 (this
+release): pluggable model connector, validated against two real providers (NIM + OpenCode Zen). Not yet
+done: spec-*generation* specialization (still fix-existing-findings only). See `CHANGELOG.md`.

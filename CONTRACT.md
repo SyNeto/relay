@@ -127,6 +127,16 @@ This envelope and the prompt templates that produce it are the current Layer 2/3
 specialization (e.g. spec *generation* rather than fixing an existing finding) may define a different
 envelope for that task — this contract only covers the fix-an-existing-finding case.
 
+## Model connector
+
+`relay fix run` sends its prompt to a configured **provider** — external, user-editable config (`name`,
+`base_url`, `api_key_path`, `default_model`), not part of the finding schema; the response envelope above
+applies uniformly regardless of which provider produced it. Providers ship with working defaults (`relay`
+works zero-config); `~/.relay/providers.json` overrides or adds provider entries by name — an override
+replaces that provider's whole record, not a field-level merge. Select one via
+`relay fix run ... --provider NAME` (default: `nim`). `relay quota status` tracks each provider's request
+volume independently — one account, one log file, one report block.
+
 ## CLI surface
 
 Every harness implementation drives the loop through exactly these subcommands — this is the contract's
@@ -138,8 +148,8 @@ enforcement point. A harness integration should never need to touch `relay`'s in
 - `relay finding record <run_id> [--from-json PATH]` (JSON object or array; also accepts stdin)
 - `relay finding verify <run_id> <target_repo_root>`
 - `relay finding mark <run_id> <finding_id> <status>`
-- `relay fix run <run_id> <finding_id> <target_repo_root> [--timeout SECONDS]`
-- `relay quota status`
+- `relay fix run <run_id> <finding_id> <target_repo_root> [--timeout SECONDS] [--provider NAME]`
+- `relay quota status [--provider NAME]`
 - `relay skill install --harness <name> [--target-dir PATH]`
 
 Run any subcommand with `--help` for exact flags. State lives under `--state-dir` (default

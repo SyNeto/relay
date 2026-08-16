@@ -13,7 +13,7 @@ from relay.engine.build_prompt import build
 from relay.engine.extract_fix import FixExtractionError, extract
 from relay.engine.state import DEFAULT_GATE_SEVERITIES, RunState, default_state_dir
 from relay.engine.verify_excerpts import verify
-from relay.providers import nim_client
+from relay.providers import openai_compat_client, registry
 
 
 def _state_dir_arg(parser: argparse.ArgumentParser):
@@ -92,6 +92,12 @@ def cmd_finding_mark(args):
 
 
 def cmd_fix_run(args):
+    try:
+        provider_config = registry.get_provider(args.provider)
+    except registry.UnknownProviderError as e:
+        print(str(e))
+        sys.exit(2)
+
     state = _load_state(args.run_id, args)
     finding = state.get_finding(args.finding_id)
     if finding is None:
@@ -100,12 +106,16 @@ def cmd_fix_run(args):
 
     state.set_phase("fix")
     prompt = build(finding)
-    print(f"[{args.finding_id}] calling model (timeout={args.timeout}s)...")
+    print(f"[{args.finding_id}] calling {provider_config.name} (timeout={args.timeout}s)...")
     try:
-        raw = nim_client.chat(
-            prompt["user"], run_id=args.run_id, system=prompt["system"], timeout=args.timeout
+        raw = openai_compat_client.chat(
+            prompt["user"],
+            run_id=args.run_id,
+            config=provider_config,
+            system=prompt["system"],
+            timeout=args.timeout,
         )
-    except nim_client.NimTimeoutError as e:
+    except openai_compat_client.ProviderTimeoutError as e:
         print(f"[{args.finding_id}] MODEL CALL FAILED: {e}")
         sys.exit(1)
 
@@ -136,7 +146,19 @@ def cmd_fix_run(args):
 def cmd_quota_status(args):
     from relay.providers.rate_limiter import RpmLimiter
 
-    print(RpmLimiter("cli").report())
+    configs = registry.load_provider_configs()
+    if args.provider:
+        if args.provider not in configs:
+            print(f"unknown provider {args.provider!r} — known providers: {', '.join(sorted(configs))}")
+            sys.exit(2)
+        names = [args.provider]
+    else:
+        names = sorted(configs)
+
+    for i, name in enumerate(names):
+        if i:
+            print()
+        print(RpmLimiter("cli", provider=name).report())
 
 
 def cmd_skill_install(args):
@@ -207,14 +229,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("run_id")
     p.add_argument("finding_id")
     p.add_argument("target_repo_root", type=Path)
-    p.add_argument("--timeout", type=float, default=nim_client.DEFAULT_TIMEOUT)
+    p.add_argument("--provider", default="nim", help="which configured provider to fix with (default: nim)")
+    p.add_argument("--timeout", type=float, default=openai_compat_client.DEFAULT_TIMEOUT)
     _state_dir_arg(p)
     p.set_defaults(func=cmd_fix_run)
 
     quota = sub.add_parser("quota", help="model-provider request volume").add_subparsers(
         dest="quota_command", required=True
     )
-    p = quota.add_parser("status", help="print rpm/1h/24h request counts")
+    p = quota.add_parser("status", help="print rpm/1h/24h request counts, one block per provider")
+    p.add_argument("--provider", default=None, help="show one provider only; default: all known providers")
     p.set_defaults(func=cmd_quota_status)
 
     skill = sub.add_parser("skill", help="harness integration bootstrap").add_subparsers(

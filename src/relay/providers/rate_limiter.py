@@ -1,12 +1,17 @@
 """Rate/quota tracking for model-provider requests.
 
-Persists request timestamps to a single log under the user's home
-directory (~/.relay/rpm_log.jsonl), not a per-run or per-project one — the
-account-level quota a provider enforces is shared across every run_id,
-every project, and every process that hits the same API key, so scoping
-the log any narrower would undercount true usage and miss exactly the
-kind of longer-window (hourly/daily) quota a 429 can come from even when
-the 60s rpm never got close to the cap.
+Persists request timestamps to one log per PROVIDER under the user's home
+directory (~/.relay/rpm_log.<provider>.jsonl), not per-run or per-project —
+the account-level quota a provider enforces is shared across every
+run_id, every project, and every process that hits that provider's API
+key, so scoping the log any narrower would undercount true usage and miss
+exactly the kind of longer-window (hourly/daily) quota a 429 can come
+from even when the 60s rpm never got close to the cap.
+
+Scoped PER PROVIDER, not globally across all providers: two different
+providers are two independent accounts with two independent quotas —
+logging both into one file would conflate them and make neither number
+meaningful.
 
 Two independent things this tracks:
 - rpm (60s window): our own self-imposed throttle, cap/target enforced
@@ -33,15 +38,23 @@ REPORT_WINDOWS = (
 )
 
 
-def default_log_path() -> Path:
+def default_log_path(provider: str) -> Path:
     home = Path(os.environ.get("RELAY_HOME", Path.home() / ".relay"))
-    return home / "rpm_log.jsonl"
+    return home / f"rpm_log.{provider}.jsonl"
 
 
 class RpmLimiter:
-    def __init__(self, run_id: str, cap: int = CAP_RPM, target: int = TARGET_RPM, path: Path | None = None):
+    def __init__(
+        self,
+        run_id: str,
+        provider: str,
+        cap: int = CAP_RPM,
+        target: int = TARGET_RPM,
+        path: Path | None = None,
+    ):
         self.run_id = run_id  # kept for the record, not used to scope the log
-        self.path = path or default_log_path()
+        self.provider = provider
+        self.path = path or default_log_path(provider)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.cap = cap
         self.target = target
@@ -81,7 +94,7 @@ class RpmLimiter:
             f.write(json.dumps({"ts": time.time(), "run_id": self.run_id}) + "\n")
 
     def report(self) -> str:
-        lines = [f"Model-provider request volume (all runs) — {self.path}"]
+        lines = [f"{self.provider} — request volume (all runs) — {self.path}"]
         for label, seconds in REPORT_WINDOWS:
             n = len(self._timestamps_since(seconds))
             lines.append(f"  {label:<10} {n} requests")
