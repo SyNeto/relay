@@ -10,8 +10,10 @@ from pathlib import Path
 from relay import __version__
 from relay.engine.apply_fix import ApplyFixError, apply_fix
 from relay.engine.build_prompt import build
+from relay.engine.build_review_prompt import build as build_review
 from relay.engine.build_spec_prompt import build as build_spec
 from relay.engine.extract_fix import FixExtractionError, extract
+from relay.engine.extract_review import ReviewExtractionError, extract as extract_review_run
 from relay.engine.extract_spec import SpecExtractionError, extract as extract_spec_draft
 from relay.engine.state import DEFAULT_GATE_SEVERITIES, RunState, default_state_dir
 from relay.engine.verify_excerpts import verify
@@ -193,6 +195,58 @@ def cmd_spec_draft(args):
     print("Not committed — review before saving/committing.", file=sys.stderr)
 
 
+def cmd_review_run(args):
+    """Review: produce an independent critique of an architectural decision
+    from stated reasoning + gathered context. Stateless — no run_id, no
+    RunState. Advisory only — never a decision or a gate. See CONTRACT.md's
+    "Review (independent critique)" section.
+    """
+    try:
+        provider_config = registry.get_provider(args.provider)
+    except registry.UnknownProviderError as e:
+        print(str(e), file=sys.stderr)
+        sys.exit(2)
+
+    output_path = Path(args.output) if args.output else None
+    if output_path and output_path.exists() and not args.force:
+        print(f"{output_path} already exists — refusing to overwrite. Use --force.", file=sys.stderr)
+        sys.exit(1)
+
+    context = [
+        {"source": path, "content": Path(path).read_text()} for path in args.context_file
+    ]
+    prompt = build_review({"decision": args.decision, "context": context})
+
+    print(f"calling {provider_config.name} (timeout={args.timeout}s)...", file=sys.stderr)
+    try:
+        raw = openai_compat_client.chat(
+            prompt["user"],
+            run_id="adhoc-review",
+            config=provider_config,
+            system=prompt["system"],
+            timeout=args.timeout,
+        )
+    except openai_compat_client.ProviderTimeoutError as e:
+        print(f"MODEL CALL FAILED: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        review = extract_review_run(raw)
+    except ReviewExtractionError as e:
+        print(f"EXTRACTION FAILED: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    if output_path:
+        output_path.write_text(review)
+        print(f"wrote review -> {output_path}", file=sys.stderr)
+    else:
+        print(review)
+    print(
+        "Advisory input only — not a decision. Weigh this alongside your own judgment before proceeding.",
+        file=sys.stderr,
+    )
+
+
 def cmd_quota_status(args):
     from relay.providers.rate_limiter import RpmLimiter
 
@@ -308,6 +362,26 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--output", default=None, help="write the draft here instead of printing to stdout")
     p.add_argument("--force", action="store_true", help="overwrite --output if it already exists")
     p.set_defaults(func=cmd_spec_draft)
+
+    review = sub.add_parser(
+        "review", help="independent critique of an architectural decision (advisory, not a gate)"
+    ).add_subparsers(dest="review_command", required=True)
+    p = review.add_parser(
+        "run", help="produce an independent review of a decision from stated reasoning + context"
+    )
+    p.add_argument("--decision", required=True, help="the decision under review, including its stated reasoning")
+    p.add_argument(
+        "--context-file",
+        action="append",
+        required=True,
+        dest="context_file",
+        help="path to a context file; repeatable, at least one required",
+    )
+    p.add_argument("--provider", default="nim", help="which configured provider to review with (default: nim)")
+    p.add_argument("--timeout", type=float, default=openai_compat_client.DEFAULT_TIMEOUT)
+    p.add_argument("--output", default=None, help="write the review here instead of printing to stdout")
+    p.add_argument("--force", action="store_true", help="overwrite --output if it already exists")
+    p.set_defaults(func=cmd_review_run)
 
     quota = sub.add_parser("quota", help="model-provider request volume").add_subparsers(
         dest="quota_command", required=True

@@ -179,6 +179,61 @@ existing file there without `--force` — the same precedent `relay skill instal
 a file asset). The evidence convention is unchanged: the driving agent reviews, then commits by hand —
 `relay` never commits anything on its own behalf, here or anywhere else in this contract.
 
+## Review (independent critique)
+
+| Role | Who | Automated? |
+| --- | --- | --- |
+| Review | model provider (mechanized) | Yes |
+| Decide | driving agent, or the human it serves | No — judgment, never automated, same category as Find/Validate |
+
+`relay review run` produces an independent critique of an architectural or technical decision, given the
+decision under review (including its stated reasoning and constraints) and supporting context (documents,
+code, prior discussion). It is a third specialization alongside Fix (correct an excerpt) and Generate
+(draft a document) — structured the same way (one request in, one response out, stateless), but with an
+inverted grounding rule, because a critique's job is the opposite of a document draft's.
+
+Input shape: `{"decision": str, "context": [{"source": str, "content": str}, ...]}` — mirrors the
+`spec draft` request shape field-for-field, with `decision` in place of `change_request`.
+
+Model-response envelope:
+
+```
+<<<REVIEW>>>
+(the review, in markdown)
+<<<END_REVIEW>>>
+```
+
+**No decline form.** Unlike the Fix and Generate envelopes, there is no `CANNOT_REVIEW` or
+`INSUFFICIENT_CONTEXT` analog. This is deliberate: those decline forms exist because Fix and Generate can
+legitimately *fail* on thin input — there's nothing to fix, or not enough context to draft from. A review's
+job is reasoning productively about thin or contested input; if it could decline whenever context is thin,
+"insufficient context" would become a socially acceptable way to dodge taking a critical stance, defeating
+the point of asking for one. A response that doesn't match `REVIEW` is still a hard error, same discipline
+as every other envelope — just one shape instead of two.
+
+Where `spec_system.md` instructs the model to assert nothing the given context doesn't support, the review
+prompt inverts that rule on purpose: a review that only restates or lightly rephrases its input has failed
+at the one thing it's for. Its value is surfacing risks, unstated assumptions, and alternative framings the
+given context does *not* already contain. Every added claim must still show its inferential step from
+something stated in the context ("if X is true, then Y follows"; "this assumes Z, which the context doesn't
+establish") — inference from stated premises is encouraged, fabricated facts about the world dressed as
+evidence are never acceptable.
+
+**This is advisory input, not a gate.** The review is one input the driving agent (or the human it serves)
+weighs alongside its own judgment — never a verdict, approval, or rejection. The decision stays exactly
+where Find/Validate already put it in this contract: with the driving agent or the human it serves, never
+with `relay` or the model provider. The review prompt is instructed to avoid decisive/gating language
+("approved", "rejected", "blocked") in favor of hedged, advisory language ("recommend", "lean toward",
+"would be safer to").
+
+Recommended (not enforced — `relay` has no way to track provenance): run the review through a different
+`--provider` than whatever produced the reasoning under review, for genuine independence.
+
+**What makes a good subject for review:** a real, still-open decision with stated reasoning and constraints,
+and enough surrounding material to check that reasoning's consistency. Poor subjects: an already-executed
+decision (produces after-the-fact rationalization, not useful input), a too-vague question with no stated
+reasoning to critique, or one-sided context that omits alternatives already considered.
+
 ## CLI surface
 
 Every harness implementation drives the loop through exactly these subcommands — this is the contract's
@@ -192,6 +247,7 @@ enforcement point. A harness integration should never need to touch `relay`'s in
 - `relay finding mark <run_id> <finding_id> <status>`
 - `relay fix run <run_id> <finding_id> <target_repo_root> [--timeout SECONDS] [--provider NAME]`
 - `relay spec draft --request TEXT --context-file PATH [--context-file PATH ...] [--provider NAME] [--timeout SECONDS] [--output PATH] [--force]`
+- `relay review run --decision TEXT --context-file PATH [--context-file PATH ...] [--provider NAME] [--timeout SECONDS] [--output PATH] [--force]`
 - `relay quota status [--provider NAME]`
 - `relay skill install --harness <name> [--target-dir PATH]`
 
