@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.6.1 — Skill coverage for repo management
+
+Fast-follow explicitly deferred at the end of 0.6.0: that release's skill-file change was a surgical fix to
+one already-wrong step (Commit), not the fuller treatment 0.5.1 gave `spec draft`/`review run`. This closes
+it. Both `SKILL.md`/`AGENT.md` gain: a fourth row in the capabilities table for `relay repo setup`/`relay
+repo commit`; a mention in the "fuzzy idea" playbook's Execute step that `--spec-file` and `repo setup`
+belong there, not just in the mechanical per-iteration walkthrough where 0.6.0 left them; and `--spec-file`
+now shown as an example flag on `run start` in "Per iteration," where it was previously undocumented
+entirely (0.6.0 added the flag to the CLI and to CONTRACT.md but never actually showed it in either skill
+file's own Start step).
+
+Deliberately **not** done, unlike 0.5.1's precedent: broadening the frontmatter `description` fields.
+`spec draft`/`review run` earned that because they're independently-triggered user intents ("draft a spec
+for X", "review this decision") a driving agent needs the skill to match on. `repo setup`/`repo commit`
+aren't that — they're sub-steps of the already-matched find/fix/validate flow, not a request shape a user
+states on their own, so there's no new trigger phrase for the description to catch.
+
 ## 0.6.0 — Run→spec traceability and local repo management
 
 Two independently-scoped, deliberately small features: linking a run back to the spec document that drove
