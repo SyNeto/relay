@@ -137,6 +137,48 @@ replaces that provider's whole record, not a field-level merge. Select one via
 `relay fix run ... --provider NAME` (default: `nim`). `relay quota status` tracks each provider's request
 volume independently — one account, one log file, one report block.
 
+## Discover & Generate (spec authorship)
+
+This is the future specialization the Model-response contract section above anticipates: spec
+*generation* rather than fixing an existing finding, with its own envelope. Two roles, following the
+same judgment/mechanized split as Find/Fix:
+
+| Role | Who | Automatable? |
+|---|---|---|
+| **Discover** | the driving agent | No — deciding what context is relevant to a change request is judgment, same category as Find |
+| **Generate** | the configured model provider, via `relay spec draft` | Yes — mechanized, request + context in, one document draft out |
+| **Validate** | the driving agent | No — same role as the loop's Validate, reused unchanged |
+
+Input shape: `{change_request: string, context: [{source: string, content: string}, ...]}`. The driving
+agent gathers `context` itself — one or more files, read in full, each labeled by its source — there's no
+`target_excerpt` here because there's no existing text to locate; Generate produces a whole document.
+
+Response envelope, sent via a system prompt (see `src/relay/prompts/spec_system.md`):
+
+```
+<<<SPEC_DRAFT>>>
+(the full document, ready to save as-is)
+<<<END_SPEC_DRAFT>>>
+```
+
+or, when the given context doesn't support a confident draft:
+
+```
+<<<INSUFFICIENT_CONTEXT>>>
+(what's missing, one or two sentences)
+<<<END_INSUFFICIENT_CONTEXT>>>
+```
+
+Same hard-error discipline as the fix envelope — anything matching neither shape is an error, never a
+best-effort parse.
+
+`relay spec draft` is **stateless** — no `run_id`, no `RunState` involved. Spec authorship doesn't have
+Find/Fix/Validate's iterate-until-gate-clean shape: one request in, one draft out, reviewed by hand. It
+prints the draft to stdout by default; `--output PATH` writes it to disk instead (refusing to overwrite an
+existing file there without `--force` — the same precedent `relay skill install` already sets for writing
+a file asset). The evidence convention is unchanged: the driving agent reviews, then commits by hand —
+`relay` never commits anything on its own behalf, here or anywhere else in this contract.
+
 ## CLI surface
 
 Every harness implementation drives the loop through exactly these subcommands — this is the contract's
@@ -149,6 +191,7 @@ enforcement point. A harness integration should never need to touch `relay`'s in
 - `relay finding verify <run_id> <target_repo_root>`
 - `relay finding mark <run_id> <finding_id> <status>`
 - `relay fix run <run_id> <finding_id> <target_repo_root> [--timeout SECONDS] [--provider NAME]`
+- `relay spec draft --request TEXT --context-file PATH [--context-file PATH ...] [--provider NAME] [--timeout SECONDS] [--output PATH] [--force]`
 - `relay quota status [--provider NAME]`
 - `relay skill install --harness <name> [--target-dir PATH]`
 

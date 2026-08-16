@@ -46,6 +46,17 @@ relay finding mark my-run-1 f1 fixed
 relay run status my-run-1
 ```
 
+Drafting a new spec document (Discover/Generate — stateless, no run needed):
+
+```bash
+relay spec draft \
+  --request "describe the change you want a spec for" \
+  --context-file some/existing/doc.md \
+  --context-file some/relevant/code.py \
+  --output DRAFT.md
+# review DRAFT.md before saving/committing it anywhere
+```
+
 ## Use from Claude Code
 
 ```bash
@@ -67,6 +78,7 @@ call.
 
 ## Status
 
-Phase 1: harness-neutral contract + Claude Code skill, ported from a validated POC. Phase 2 (this
-release): pluggable model connector, validated against two real providers (NIM + OpenCode Zen). Not yet
-done: spec-*generation* specialization (still fix-existing-findings only). See `CHANGELOG.md`.
+Phase 1: harness-neutral contract + Claude Code skill, ported from a validated POC. Phase 2: pluggable
+model connector, validated against two real providers (NIM + OpenCode Zen). Phase 3 (this release):
+Discover & Generate (`relay spec draft`) — spec authorship, not just fixing an existing finding. Not yet
+done: a second harness adapter (only Claude Code is packaged today). See `CHANGELOG.md`.
