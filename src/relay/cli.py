@@ -23,7 +23,7 @@ from relay.engine.repo import (
     select_files_to_commit,
     stage_and_commit,
 )
-from relay.engine.state import DEFAULT_GATE_SEVERITIES, RunState, default_state_dir
+from relay.engine.state import DEFAULT_GATE_SEVERITIES, RunState, default_state_dir, list_run_ids
 from relay.engine.verify_excerpts import verify
 from relay.providers import openai_compat_client, registry
 
@@ -58,6 +58,16 @@ def cmd_run_status(args):
     state = _load_state(args.run_id, args)
     print(state.render())
     print(f"\nshould_stop(): {state.should_stop()}")
+
+
+def cmd_run_list(args):
+    state_dir = args.state_dir or default_state_dir()
+    run_ids = list_run_ids(state_dir)
+    if not run_ids:
+        print(f"no runs found under {state_dir}")
+        return
+    for run_id in run_ids:
+        print(RunState(run_id, state_dir=state_dir).summary_line())
 
 
 def cmd_finding_record(args):
@@ -373,6 +383,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("run_id")
     _state_dir_arg(p)
     p.set_defaults(func=cmd_run_status)
+
+    p = run.add_parser("list", help="list every run found under --state-dir, one summary line each")
+    _state_dir_arg(p)
+    p.set_defaults(func=cmd_run_list)
 
     finding = sub.add_parser("finding", help="manage findings within a run").add_subparsers(
         dest="finding_command", required=True

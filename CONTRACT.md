@@ -84,6 +84,10 @@ euphemism for abandoned. `open` is not resolved. The gate is clean when every re
 `severity` is in `gate_severities` is resolved. A run should stop when either `iteration >= max_iterations`
 or (`iteration > 0` and the gate is clean).
 
+**Discovering runs.** `relay run list [--state-dir PATH]` enumerates every `run_id` with a state file under
+`state_dir`, one summary line each (iteration, phase, gate status, `spec_file` if set) — the way to find a
+run's `run_id` to resume it, or to see what's in flight across a machine, without needing to remember it.
+
 ## Finding schema
 
 One record per finding, produced during Find, consumed by Fix:
@@ -298,6 +302,7 @@ enforcement point. A harness integration should never need to touch `relay`'s in
 - `relay run start <run_id> [--max-iterations N] [--gate-severities LIST] [--spec-file PATH]` — `LIST` is
   comma-separated with no spaces, e.g. `--gate-severities CRITICAL,HIGH`
 - `relay run status <run_id>`
+- `relay run list [--state-dir PATH]`
 - `relay finding record <run_id> [--from-json PATH]` (JSON object or array; also accepts stdin)
 - `relay finding verify <run_id> <target_repo_root>`
 - `relay finding mark <run_id> <finding_id> <status>`
