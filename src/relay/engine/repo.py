@@ -219,6 +219,29 @@ def stage_and_commit(repo_root: Path, files: set[str] | list[str], message: str)
     return result.stdout.strip()
 
 
+def spec_file_tracking_status(repo_root: Path, spec_file: str) -> str:
+    """Report whether ``spec_file`` is tracked by git in ``repo_root``.
+
+    This function never raises: it is an advisory check, not a gate, and
+    must never block a commit or PR. Returns ``"tracked"``, ``"untracked"``,
+    ``"outside"``, or ``"unknown"``.
+    """
+    try:
+        resolved = (repo_root / spec_file).resolve()
+        rel = resolved.relative_to(repo_root.resolve())
+    except (OSError, ValueError):
+        return "outside"
+    try:
+        result = _run(repo_root, ["ls-files", "--error-unmatch", "--", str(rel)])
+    except OSError:
+        return "unknown"
+    if result.returncode == 0:
+        return "tracked"
+    if result.returncode == 1:
+        return "untracked"
+    return "unknown"
+
+
 def build_commit_message(
     fixed_findings: list[dict],
     spec_file: str | None = None,
