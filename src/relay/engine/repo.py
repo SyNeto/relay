@@ -92,13 +92,27 @@ def fetch_branch(repo_root: Path, remote: str, branch: str) -> None:
         raise RepoError(f"git fetch {remote} {branch} failed in {repo_root}: {result.stderr.strip()}")
 
 
+def _require_branch_exists(repo_root: Path, branch: str, command: str) -> None:
+    """Raise RepoError when *branch* is not present locally, naming the
+    current branch and suggesting `--branch <current>` or
+    `relay repo setup`."""
+    if not branch_exists(repo_root, branch):
+        current = current_branch(repo_root)
+        raise RepoError(
+            f"{command}: branch {branch!r} does not exist locally in {repo_root}; "
+            f"current branch is {current!r}. Pass --branch {current} or run "
+            "`relay repo setup` to create the expected branch."
+        )
+
+
 def push_branch(repo_root: Path, remote: str, branch: str) -> str:
     """`git push -u <remote> <branch>`. Never force. Returns "pushed" or
     "up-to-date" (nothing new to push -- not an error). Raises RepoError
-    verbatim on any git failure, including a non-fast-forward rejection
-    (diverged remote history) -- relay never force-pushes a run's own
-    branch and never guesses how to reconcile it; that's the driving
-    agent's call."""
+    when the local branch is missing, or verbatim on any git failure,
+    including a non-fast-forward rejection (diverged remote history) --
+    relay never force-pushes a run's own branch and never guesses how to
+    reconcile it; that's the driving agent's call."""
+    _require_branch_exists(repo_root, branch, "relay repo push")
     before = _run(repo_root, ["rev-parse", f"{remote}/{branch}"])
     result = _run(repo_root, ["push", "-u", remote, branch])
     if result.returncode != 0:
@@ -258,9 +272,12 @@ def create_pull_request(repo_root: Path, head: str, title: str, body: str, base:
     relay assuming every target repo follows one particular branching
     model. Requires `gh` installed and authenticated, and requires
     `head` already pushed -- this function does not push as a side
-    effect (see push_branch). gh's own error (auth failure, "no commits
-    between X and Y", "head ref not found") surfaces verbatim as
-    RepoError. Returns the created PR's URL."""
+    effect (see push_branch). A missing local `head` branch is caught by
+    _require_branch_exists before gh is invoked, producing a clear,
+    actionable RepoError; gh's own error (auth failure, "no commits
+    between X and Y") surfaces verbatim as RepoError. Returns the created
+    PR's URL."""
+    _require_branch_exists(repo_root, head, command="relay repo pr create")
     args = ["pr", "create", "--head", head, "--title", title, "--body", body]
     if base:
         args += ["--base", base]

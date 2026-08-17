@@ -317,13 +317,29 @@ idempotent. Ensures a dedicated branch (default `relay/<run_id>`) exists and is 
 Run this right after Start, while the tree is still clean — not after Fix has already made changes, since
 the dirty-tree refusal above would then correctly block it.
 
+Already working in a dedicated worktree/branch (this project's own dev convention:
+`git worktree add -b <name> ~/Projects/<repo>-<feature> main`)? Two paths:
+
+1. Name the worktree's branch `relay/<run_id>` from creation for relay-run worktrees specifically.
+   This gives real traceability, and `relay repo setup` then becomes a harmless idempotent no-op —
+   `repo push` and `repo pr create`'s `--branch` defaults work with zero extra flags.
+2. Keep a different branch name and skip `relay repo setup` entirely, always passing `--branch`
+   explicitly to `repo push` and `repo pr create`. (`relay repo commit` is branch-name-agnostic and
+   works either way.)
+
+Nothing in relay relies on `relay repo setup` having been called specifically — only on the branch
+existing and being checked out. The implementation does nothing beyond `git checkout`/`git checkout -b`
+— no upstream tracking, no side state — so a branch made by plain `git worktree add -b` behaves
+identically to one `relay repo setup` would make.
+
 **`--base-branch NAME [--remote NAME]`** (default remote: `origin`) — for git-flow-style target repos,
 branch from a freshly-fetched `<remote>/<base-branch>` (e.g. `origin/dev`) instead of current HEAD: fetches
 first, then creates the run's branch from that remote-tracking ref, never from local `dev` directly (only
 `sync-dev`, below, ever touches local `dev`). Only affects the *create* path — if the run's branch already
 exists, `--base-branch` is ignored entirely; idempotent re-invocation never resets an existing branch to a
-different base. Omit it to keep the previous behavior exactly (branch from current HEAD, no network access
-at all).
+different base. Create the worktree from the correct base up front, since `--base-branch` cannot
+retroactively fix an already-existing branch. Omit it to keep the previous behavior exactly (branch from
+current HEAD, no network access at all).
 
 **If `--state-dir`'s default (`./.relay/runs`, relative to wherever `relay` is invoked from) resolves to
 somewhere inside `target_repo_root`**, that directory shows up as untracked in `git status` like anything
@@ -375,6 +391,13 @@ is set. `-m TEXT` replaces only the headline; every other section is still gener
 committing, any dirty files outside the committed set (e.g. a fix that required touching a second, unlisted
 file) are printed as a note — left for the driving agent to handle, not silently dropped.
 
+Known limitation: `relay repo commit` is branch-name-agnostic and commits to whatever branch is currently
+checked out, regardless of the supplied `<run_id>`. It does not validate that the current branch matches the
+run, so invoking `relay repo commit <run_id_B> ...` while checked out on run A's branch would land run B's
+committed files on run A's branch without an error. This is a deliberate, already-validated property — a run
+can be committed from a plain feature-named branch rather than a `relay/<run_id>` branch — so adding
+branch-name validation is out of scope here.
+
 **`relay repo pr create` does not yet support `--also-commit`.** A pure-bookkeeping run (zero fixed
 findings, only `--also-commit` files) can `repo commit` through relay but cannot `repo pr create` — that
 command still requires at least one fixed finding to describe in the PR body, and refuses otherwise. The
@@ -386,7 +409,10 @@ call?), named explicitly here rather than discovered by surprise.
 **`relay repo push <run_id> <target_repo_root> [--branch NAME] [--remote NAME]`** — pushes the run's branch
 (default `relay/<run_id>`) to `--remote` (default `origin`), setting upstream on first push. **Never
 force.** Nothing to push is reported, not an error. A non-fast-forward rejection surfaces verbatim as a
-failure — `relay` never guesses how to reconcile diverged history.
+failure — `relay` never guesses how to reconcile diverged history. If the branch being pushed — the
+`--branch` value, or the `relay/<run_id>` default — does not exist locally, `repo push` fails loudly,
+naming the actual current branch and suggesting `--branch`, instead of letting git's raw
+`src refspec ... does not match any` surface.
 
 **`relay repo pr create <run_id> <target_repo_root> [--base BRANCH] [--branch NAME] [--title TEXT]`** —
 opens a PR via `gh pr create` (requires `gh` installed and authenticated; shelled out to exactly like `git`,
@@ -394,7 +420,9 @@ no new dependency). Title/body mirror `repo commit`'s message shape (headline, o
 line per this run's `fixed` findings, `Spec-File:` trailer if set). **Requires the branch already pushed** —
 does not push as a side effect; run `relay repo push` first. This is deliberate: push and PR-create are each
 their own explicit, remote-visible action, and auto-chaining a push would blur which invocation published
-what and could mask a push failure behind a confusing `gh` error. `--base` has no relay-side default
+what and could mask a push failure behind a confusing `gh` error. If the head branch — the `--branch` value,
+or `relay/<run_id>` when omitted — doesn't exist locally, the command fails loudly before ever calling `gh`,
+naming the actual current branch and suggesting `--branch`. `--base` has no relay-side default
 (omitted → `gh` falls back to the repo's configured default branch) — hardcoding `dev` would assume every
 target repo follows git-flow, which nothing else here assumes. Prints the created PR's URL.
 

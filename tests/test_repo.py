@@ -8,6 +8,7 @@ from relay.engine.repo import (
     branch_exists,
     build_commit_message,
     checkout_or_create_branch,
+    create_pull_request,
     current_branch,
     diff_against,
     build_pr_body,
@@ -623,3 +624,29 @@ def test_repo_commit_also_files_not_dirty_leaves_repo_unchanged(tmp_path: Path):
 
     assert _git(repo, "rev-parse", "HEAD").strip() == head_before
     assert is_dirty(repo)  # a.md's change is still sitting there, untouched
+
+
+def test_push_branch_missing_local_branch_raises_naming_current_branch(tmp_path: Path):
+    repo = _git_repo(tmp_path)
+    missing = "relay/does-not-exist"
+    current = current_branch(repo)
+
+    with pytest.raises(RepoError) as exc:
+        push_branch(repo, "origin", missing)
+
+    message = str(exc.value)
+    assert missing in message
+    assert current in message
+
+
+def test_create_pull_request_missing_local_branch_raises_before_any_gh_call(tmp_path: Path):
+    repo = _git_repo(tmp_path)
+    missing = "relay/does-not-exist"
+    current = current_branch(repo)
+
+    with pytest.raises(RepoError) as exc:
+        create_pull_request(repo, missing, "title", "body")
+
+    message = str(exc.value)
+    assert missing in message
+    assert current in message
