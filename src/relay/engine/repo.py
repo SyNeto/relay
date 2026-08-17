@@ -10,6 +10,8 @@ mid-rebase. Merging a pull request is deliberately never wrapped here --
 see CONTRACT.md's "Repository management" section for why that line is
 drawn where it is.
 """
+import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -310,6 +312,35 @@ def create_pull_request(repo_root: Path, head: str, title: str, body: str, base:
     return result.stdout.strip()
 
 
+def list_open_prs(repo_root: Path) -> list[dict]:
+    """`gh pr list --json number,headRefName,title` -- every currently
+    open PR against the repo `repo_root`'s remote is configured for.
+    Raises RepoError if gh itself fails (not authenticated, network,
+    etc) or returns unparseable JSON -- this is a tool failure, not
+    'zero PRs found'."""
+    result = _run_gh(repo_root, ["pr", "list", "--state", "open", "--json", "number,headRefName,title"])
+    if result.returncode != 0:
+        raise RepoError(f"gh pr list failed in {repo_root}: {result.stderr.strip()}")
+    try:
+        return json.loads(result.stdout)
+    except ValueError as e:
+        raise RepoError(f"gh pr list returned unparseable JSON in {repo_root}: {e}")
+
+
+def pr_diff(repo_root: Path, number: int) -> str:
+    """`gh pr diff <number>` -- the PR's diff, resolved by GitHub
+    regardless of whether the PR's branch lives on `repo_root`'s own
+    remote or a fork (a plain `git fetch <remote> <branch>` would fail
+    for fork PRs; gh resolves the PR by number instead). Raises
+    RepoError if gh fails for this specific PR (e.g. it was closed or
+    deleted between listing and this call) -- the caller decides
+    whether to skip and continue or propagate."""
+    result = _run_gh(repo_root, ["pr", "diff", str(number)])
+    if result.returncode != 0:
+        raise RepoError(f"gh pr diff {number} failed in {repo_root}: {result.stderr.strip()}")
+    return result.stdout
+
+
 def require_branch_matches_remote(repo_root: Path, remote: str, branch: str) -> None:
     """Raises RepoError unless local `branch`'s tip SHA is identical to
     `<remote>/<branch>`'s -- neither ahead (unpushed local commits) nor
@@ -389,3 +420,56 @@ def push_force_with_lease(repo_root: Path, remote: str, branch: str) -> str:
             f"git push --force-with-lease {remote} {branch} failed in {repo_root}: {result.stderr.strip()}"
         )
     return "pushed"
+
+
+_VERSION_HEADING_ADDED = re.compile(r'^\+##\s*\[?(\d+\.\d+\.\d+)\]?', re.MULTILINE)
+_VERSION_HEADING_REMOVED = re.compile(r'^-##\s*\[?(\d+\.\d+\.\d+)\]?', re.MULTILINE)
+_VERSION_LINE_ADDED = re.compile(r'^\+version\s*=\s*["\'](\d+\.\d+\.\d+)["\']', re.MULTILINE)
+
+
+def extract_added_version(diff_text: str) -> str | None:
+    """The first version-bump signal among diff_text's ADDED lines only
+    -- a new '## X.Y.Z' or '## [X.Y.Z]' CHANGELOG heading, or a changed
+    'version = "X.Y.Z"' line (pyproject.toml style). Diff-based, not a
+    full-file scan: order-independent, unlike taking 'the first heading
+    in the whole file' (which only works if the file happens to be
+    newest-first). A heading that's merely edited in place (e.g. a typo
+    fix) produces a removed and an added line with the SAME version
+    number in a unified diff -- excluded here by checking the added
+    version doesn't also appear as a removed heading, so only a
+    genuinely new version counts. Returns None if no such line was
+    added -- never guesses, never raises."""
+    removed = set(_VERSION_HEADING_REMOVED.findall(diff_text))
+    for match in _VERSION_HEADING_ADDED.finditer(diff_text):
+        version = match.group(1)
+        if version not in removed:
+            return version
+    match = _VERSION_LINE_ADDED.search(diff_text)
+    return match.group(1) if match else None
+
+
+def changelog_has_version(repo_root: Path, ref: str, version: str) -> bool:
+    """Whether `version` already appears as a '## X.Y.Z' or
+    '## [X.Y.Z]' heading anywhere in CHANGELOG.md at `ref` (e.g. the
+    target branch) -- read via `git show <ref>:CHANGELOG.md`, no
+    working-tree changes. Returns False (never raises) if the file or
+    ref doesn't exist -- this is advisory-only and must never block
+    anything over a missing file or bad ref."""
+    result = _run(repo_root, ["show", f"{ref}:CHANGELOG.md"])
+    if result.returncode != 0:
+        return False
+    heading_pattern = re.compile(r'^##\s*\[?' + re.escape(version) + r'\]?\b', re.MULTILINE)
+    return bool(heading_pattern.search(result.stdout))
+
+
+def find_version_collisions(claims: list[dict]) -> dict[str, list[dict]]:
+    """Pure grouping over `claims` (each a dict with at least a
+    'version' key, e.g. {"source": "PR #12", "version": "1.0.1"})
+    -- returns {version: [claim, claim, ...]} for every version claimed
+    by 2 or more entries. Source-agnostic: the same function groups
+    open-PR claims and an already-released claim from changelog_has_version
+    identically. No subprocess, no filesystem -- pure."""
+    by_version: dict[str, list[dict]] = {}
+    for claim in claims:
+        by_version.setdefault(claim["version"], []).append(claim)
+    return {version: group for version, group in by_version.items() if len(group) >= 2}

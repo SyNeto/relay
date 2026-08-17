@@ -411,6 +411,13 @@ cases apply: if the path lies entirely outside `target_repo_root`, move it into 
 when the untracked path is already named in `--also-commit`. A failure in the tracking check itself is
 silently swallowed — it never blocks the commit.
 
+When the committed file set includes `CHANGELOG.md` or `pyproject.toml` and the diff being committed
+(`git diff HEAD`, checked before staging) actually adds a new version line — not merely because the file
+happens to be present in the commit set — `repo commit` prints a non-blocking reminder to stderr naming
+`relay repo check-integration` as the next step. The check is diff-based rather than presence-based
+specifically to avoid false positives on unrelated changes (a dependency bump in `pyproject.toml`, a typo
+fix in an old `CHANGELOG.md` entry) that would otherwise train the driving agent to ignore the reminder.
+
 **`relay repo pr create` does not yet support `--also-commit`.** A pure-bookkeeping run (zero fixed
 findings, only `--also-commit` files) can `repo commit` through relay but cannot `repo pr create` — that
 command still requires at least one fixed finding to describe in the PR body, and refuses otherwise. The
@@ -478,6 +485,35 @@ afterward. Safety design, in execution order:
 The only step that touches the remote is the final force-with-lease push, reached only after every guard
 above has passed — the one truly irreversible action in this command is also the last thing that can
 happen, and it's the one git itself refuses to perform blindly.
+
+### Cross-PR version-collision check.
+
+`relay repo check-integration <target_repo_root> [--base main] [--remote origin] [--fail-on-collision]` is
+not run-scoped — it takes a target repo root and inspects it directly, the same shape as `sync-dev`. It
+lists every open PR against that repo's remote via `gh pr list`, then reads each PR's diff via `gh pr
+diff`, which resolves fork PRs correctly where a plain `git fetch` of the branch name would not. From each
+diff it extracts only the ADDED lines, looking for a newly-added `## X.Y.Z` CHANGELOG heading or a changed
+`pyproject.toml` version line, and excludes a version that also appears on a REMOVED line in the same diff
+(an in-place edit to an existing entry, e.g. a typo fix, produces exactly that shape and must not read as a
+new version) — this is a diff scan, not a full-file scan, so it does not depend on the changelog being
+newest-first. It also fetches `--remote`/`--base` fresh (same mechanism `sync-dev` uses) and checks whether
+any claimed version already appears in `CHANGELOG.md` there — folding in the "this version was already
+released by an already-merged PR" case with a single `git show` against the freshly-fetched ref, not the
+possibly-stale local branch of the same name. If the fetch itself fails, that check is skipped with a
+warning rather than blocking the rest of the run. Any version claimed by two or more sources is reported
+on stderr; the
+command never resolves anything itself. A successful run exits 0 whether or not a collision was found,
+unless `--fail-on-collision` is passed, in which case a found collision exits 1 — the same
+opt-in-changes-default-exit-code pattern as `--no-retry` and `--i-understand-this-rewrites-dev-history`,
+not new territory for this project. If the tool itself fails (e.g. `gh` not authenticated), it exits 1
+regardless.
+
+Honest limits: a PR opened after this check runs is invisible to it, so re-run it close to merge time,
+not just once; a PR from a fork whose author never opened it against this repo is not visible to
+`gh pr list` at all; only `--base` is checked for already-released versions, so a project publishing from
+multiple release lines needs one run per line; and this is the only relay-native mechanized way to catch
+this — a human reading the open PR list by eye can already do a version of this, the command just
+automates the reading and comparing.
 
 ## CLI surface
 
