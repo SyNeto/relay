@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.9.1 — Skill coverage for push, PR creation, and dev sync
+## 0.9.2 — Skill coverage for push, PR creation, and dev sync
 
 The fast-follow deferred at the end of 0.9.0, same split as 0.6.0/0.6.1: `SKILL.md`/`AGENT.md` shipped
 untouched with 0.9.0 since nothing in them became actively false, only incomplete. Closes that gap.
@@ -18,15 +18,57 @@ Both files: capabilities table's repo row extended to `repo setup` / `repo commi
 create` (one row, not four — they're the same local-git-plumbing-then-publish family); the "fuzzy idea"
 playbook's Execute step now mentions `repo push`/`repo pr create` once a branch is ready; Notes gains a
 `repo sync-dev` bullet (placed there, not in the per-run walkthrough, since it's repo-level maintenance, not
-part of any single run's lifecycle); version stamp bumped `v0.8.0` → `v0.9.1`. Frontmatter `description`
-fields deliberately not broadened, same reasoning 0.6.1 already applied to `repo setup`/`repo commit`: these
-are sub-steps of the already-matched find/fix/validate flow, not an independently-triggered user intent.
+part of any single run's lifecycle); version stamp bumped `v0.8.0` → `v0.9.2` (landed after 0.9.1's retry/
+backoff fix merged first — see that entry below). Frontmatter `description` fields deliberately not
+broadened, same reasoning 0.6.1 already applied to `repo setup`/`repo commit`: these are sub-steps of the
+already-matched find/fix/validate flow, not an independently-triggered user intent.
 
 Also validated live, further along the lifecycle than any prior release: `repo setup` (no `--base-branch`,
 since `relay`'s own repo is main-only, not git-flow), `repo commit`, `repo push`, and `repo pr create` all
 run for real against `relay`'s own GitHub repo — the first time this project's own dev loop went through a
 real PR instead of a direct `merge --no-ff` to `main`. `gh pr merge` stays unwrapped by design (see 0.9.0);
 the PR is reviewed and merged by hand.
+
+## 0.9.1 — Bounded retry/backoff on transient provider failures
+
+Fixes [#3](https://github.com/SyNeto/relay/issues/3), filed after a real incident during the skill-coverage
+fast-follow dogfood run (PR #1): a 429 from `nim` (confirmed provider-side — `relay quota status` showed
+near-zero local usage), a manual retry that also 429'd, then a fallback to `opencode-go` that hit a plain
+timeout. The closing check was silently skipped.
+
+Went through the full propose → review → adjust process: `relay spec draft` produced an initial design,
+`relay review run` gave it an independent critique, and a few things it caught changed the final shape —
+most importantly, the incident's 429 was **persistent**, so the proposal's original defaults (retrying with
+the same 15s wait the incident already showed failing) would have automated a strategy already proven
+insufficient. This ships as **transient-blip resilience + visibility, not an incident fix** — a genuinely
+down provider will still exhaust the retry budget and fail; that's provider fallback's job, deliberately
+deferred as a separate, later issue.
+
+`openai_compat_client.py` gains a typed `ProviderError` hierarchy (`ProviderTimeoutError`,
+`ProviderConnectionError`, `ProviderRateLimitError`, `ProviderServerError`, `ProviderAuthError`,
+`ProviderRequestError`, `ProviderUnknownError`), each with a `retryable` class attribute, and
+`classify_openai_error()` mapping real openai SDK exceptions onto it — 429/5xx(500/502/503/504)/timeout/
+connection are retryable, 401/4xx are not (retrying a request that can never succeed is pure waste), and an
+unrecognized SDK exception type classifies as `ProviderUnknownError` (never retried — "fail loudly, never
+guess" extended to error classification itself). `Retry-After` is respected when present (from both 429 and
+any 5xx that carries it), clamped to `--retry-base-delay`'s `max_delay`; if a provider asks for longer than
+that, `should_retry` fails fast rather than burning a retry attempt that will likely just 429 again.
+
+New `chat_with_retry()`, sibling to `chat()` (not routed through `registry.chat_for()` — verified `cli.py`
+calls `chat()` directly today, so the retry wrapper stays in the same module rather than widening the
+provider-dispatch seam). `relay fix run`/`spec draft`/`review run` gain `--max-retries N` (default 2),
+`--no-retry` (mutually exclusive with `--max-retries`), and `--retry-base-delay SECONDS`. Every retry
+prints to stderr with a `[relay] attempt N/M` prefix — a first-attempt success prints nothing, so silence on
+stderr means no retry happened. Default policy's worst-case wall clock before giving up: roughly
+3 × 90s timeout + ~45s backoff ≈ 6 minutes — documented explicitly in CONTRACT.md rather than left for a
+driving agent to discover by waiting.
+
+New `tests/test_openai_compat_client.py` (no file existed for this module before): the full classification
+mapping tested with **real** SDK exceptions built on real `httpx2` `Request`/`Response` objects (`httpx2` is
+a genuine, independently pip-installed package required by `openai`, not something needing mocking — this
+was verified directly, resolving what the initial design proposal had flagged as an open question), plus the
+pure `should_retry`/`compute_backoff` decision functions. No mocking anywhere, matching the codebase's
+existing convention exactly.
 
 ## 0.9.0 — Push, PR creation, and post-release dev sync
 
@@ -84,7 +126,7 @@ false for everything except merge.
 **Skill files (`SKILL.md`/`AGENT.md`) intentionally not touched this release**, same split as 0.6.0/0.6.1:
 nothing in them becomes actively wrong by this shipping (the `repo setup`/`repo commit` capabilities-table
 row's "local only, no push/PR" stays true about those two specific commands), it's a coverage gap, not an
-inaccuracy — deferred to a 0.9.1 fast-follow.
+inaccuracy — deferred to a 0.9.2 fast-follow.
 
 Validated live end to end against a real, disposable private GitHub-hosted scratch repo — the first release
 where a local-only scratch repo wasn't enough, since `gh pr create` needs an actual hosted repo. Confirmed:
