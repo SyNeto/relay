@@ -1,5 +1,74 @@
 # Changelog
 
+## 0.9.0 — Push, PR creation, and post-release dev sync
+
+The "glue" work deferred since 0.6.0. Meaningfully higher-stakes than every prior release: this touches a
+remote (push), creates artifacts visible to a whole team (PRs), and one operation — rebasing `dev` onto
+`main` after a release — rewrites history other collaborators may already have pulled locally. Every new
+`engine/repo.py` addition gets the same fail-loudly `RepoError` discipline as everything since 0.6.0,
+extended to cover what happens when that discipline matters most — a shared branch, force-pushed.
+
+**`relay repo setup`** gains `--base-branch NAME [--remote NAME]`: fetches `<remote>/<base-branch>` (e.g.
+`origin/dev`) and branches from that ref instead of current HEAD — for git-flow-style repos where new work
+should start from a known integration branch, not wherever HEAD happens to be. Ignored once the run's
+branch already exists — idempotent re-invocation never resets an existing branch to a different base.
+Backward compatible: omitted, behavior is unchanged.
+
+**`relay repo push`** — plain `git push -u <remote> <branch>`. Never force; a non-fast-forward rejection
+surfaces as-is.
+
+**`relay repo pr create`** — opens a PR via `gh pr create` (no new dependency — shelled out to exactly like
+`git`). Title/body mirror `repo commit`'s message shape via a new `build_pr_body`, which delegates directly
+to `build_commit_message` rather than reimplementing the formatting. Requires the branch already pushed —
+does not push as a side effect, so a push failure never hides behind a confusing `gh` error; push and
+PR-create are each their own explicit, remote-visible action. `--base` has no relay-side default (hardcoding
+`dev` would assume every target repo follows git-flow).
+
+**`relay repo sync-dev`** — the highest-stakes addition: rebases `dev` onto `main` and force-with-lease-
+pushes the result. Deliberately **not run-scoped** (no `run_id`, no `--state-dir`) — this is repo-level
+maintenance after a release, not part of any single run's lifecycle. Safety sequence: refuses before any git
+command runs at all without an explicit `--i-understand-this-rewrites-dev-history` flag (deliberately not
+reusing this codebase's existing `--force`/`--yes`, which already mean something much lower-stakes
+elsewhere); fetches both branches fresh; a new `require_branch_matches_remote` guard refuses if local `dev`
+is stale or diverged from the remote *before* the operation starts (`--force-with-lease` alone only protects
+against the remote moving *during* the operation); refuses on a dirty tree; on a rebase conflict, captures
+the conflicting files and runs `git rebase --abort` immediately rather than ever leaving the repo mid-rebase
+for `relay` to babysit; only then force-with-lease-pushes, never bare `--force`.
+
+**`gh pr merge` is deliberately not wrapped.** Applying the same test this contract has used everywhere else
+(Find/Validate never automated; Review's "no decline form"; the Evidence convention's "invoking X *is* the
+explicit action"): setup/commit/push/pr-create all mechanize a decision already made earlier in the same
+agent-supervised loop. Merging is different in kind — it's the point where an *external* review is supposed
+to happen, and that reviewer often isn't the same agent that ran the loop. A thin pass-through would compute
+nothing relay-specific and would make the one step meant to require an external check look, in an agent's
+tool-call history, exactly as routine as `repo commit` does. Merge by whatever process the target repo
+already uses, directly via `gh pr merge` or the GitHub UI.
+
+`VALID_PHASES` deliberately **not** extended with a `"push"`/`"pr"` value — `phase` models per-iteration
+find→fix→validate→commit progress, and push/PR-create aren't per-iteration steps.
+
+CONTRACT.md's "Repository management" deferral language resolved for push/PR-create/dev-sync (now
+documented, not deferred); narrowed to keep deferring merge specifically, with the reasoning above stated
+plainly instead of lumped in as generic "later glue." Evidence convention extended to match. README's Status
+paragraph updated — it previously said push/PR/merge were "still entirely manual," which this release makes
+false for everything except merge.
+
+**Skill files (`SKILL.md`/`AGENT.md`) intentionally not touched this release**, same split as 0.6.0/0.6.1:
+nothing in them becomes actively wrong by this shipping (the `repo setup`/`repo commit` capabilities-table
+row's "local only, no push/PR" stays true about those two specific commands), it's a coverage gap, not an
+inaccuracy — deferred to a 0.9.1 fast-follow.
+
+Validated live end to end against a real, disposable private GitHub-hosted scratch repo — the first release
+where a local-only scratch repo wasn't enough, since `gh pr create` needs an actual hosted repo. Confirmed:
+`repo setup --base-branch dev` branching correctly from the fetched ref; a real PR created with the expected
+auto-generated title/body/base/head; `sync-dev`'s conflict-abort path against a genuine conflicting change
+(named the right file, left `dev` untouched); `sync-dev`'s clean path (rebase + force-with-lease succeeded);
+and, with a second clone standing in for a collaborator, that its local `dev` was left diverged from the
+rewritten remote — not fast-forwardable, needing a manual reset — the concrete consequence the opt-in flag
+exists to make deliberate. `push_force_with_lease`'s rejection semantics and `rebase_onto`'s conflict-abort
+path are additionally unit-tested locally (two-clone bare-remote setups, a constructed same-line conflict)
+— no mocking, matching this codebase's existing convention.
+
 ## 0.8.0 — `relay review run --diff-from-branch`
 
 Makes the "closing check" pattern (already described in the skill files' fuzzy-idea playbook — re-run

@@ -18,7 +18,7 @@ is the load-bearing design decision, not an implementation detail:
 | **Find** | the driving agent | No — reading the target and deciding what's wrong is judgment |
 | **Fix** | the configured model provider, via `relay fix run` | Yes — mechanized, one finding in, one diff out |
 | **Validate** | the driving agent | No — reading the diff `relay fix run` produced and deciding accept/reject/hand-fix is judgment |
-| **Commit** | the driving agent, via `relay repo setup`/`relay repo commit` or plain `git` | Partially — mechanics (branch, staging, message) are mechanized; deciding *when* to commit, and that this iteration's work is actually done, stays judgment |
+| **Commit** | the driving agent, via `relay repo setup`/`commit`/`push`/`pr create` or plain `git`/`gh` | Partially — mechanics (branch, staging, message, publishing) are mechanized; deciding *when* to commit or publish, and that this iteration's work is actually done, stays judgment |
 | **Check** | `relay run status` | Yes — pure function of recorded finding statuses |
 
 **Fix and Validate must never be the same actor.** A model that both proposes and accepts its own fix has
@@ -61,7 +61,9 @@ model that produced the Fix — reintroduces exactly the failure mode this loop 
 7. **Check.** `relay run status <run_id>` prints the current state and whether the run should stop. If not
    stopping and `iteration < max_iterations`: go to step 1 for the next iteration. If stopping: report the
    final state — either a clean pass on the gated severities, or the max-iteration cutoff with whatever's
-   still open.
+   still open. Once the run is stopping with a clean gate (or the driving agent otherwise decides the
+   branch is ready), `relay repo push` and `relay repo pr create` can publish it — see "Repository
+   management" below. Neither is part of the repeating per-iteration cycle above.
 
 ## State model
 
@@ -87,6 +89,14 @@ or (`iteration > 0` and the gate is clean).
 **Discovering runs.** `relay run list [--state-dir PATH]` enumerates every `run_id` with a state file under
 `state_dir`, one summary line each (iteration, phase, gate status, `spec_file` if set) — the way to find a
 run's `run_id` to resume it, or to see what's in flight across a machine, without needing to remember it.
+
+**Push and PR creation don't touch `phase`.** `VALID_PHASES` stays `("find", "fix", "validate", "commit")`.
+`relay repo push`/`relay repo pr create` load a run's state (to derive the default branch name and, for
+`pr create`, the fixed findings and `spec_file`) but never call `set_phase`. `phase` models progress through
+one iteration's find→fix→validate→commit cycle; push and PR-create aren't per-iteration steps — a run's
+branch might get pushed after every iteration, or only once at the end — so there's no single canonical
+moment for them the way `"commit"` has Sequence step 6. Reusing the phase enum for them would strain a model
+built for something else rather than fit it.
 
 ## Finding schema
 
@@ -259,17 +269,24 @@ spec (e.g. via `--context-file`) and the diff (via `--diff-from-branch`) as the 
 
 ## Repository management
 
-`relay repo setup` and `relay repo commit` mechanize the branch-and-commit mechanics of the Commit role
-(see Roles above) — deciding *when* to invoke them stays with the driving agent, same as every other
-explicit `relay` subcommand. Both operate purely on local git state — no remote, no PR, no merge; the loop
-hands the run's finished branch back to the driving agent (or the human it serves) to push, review, and
-merge by whatever process the target repo already uses. Pushing, opening a pull request, and merging are
-explicitly out of scope for this cut, deferred to a later "glue" design.
+`relay repo setup`, `relay repo commit`, `relay repo push`, and `relay repo pr create` mechanize the
+branch/commit/publish mechanics around the Commit role (see Roles above) — deciding *when* to invoke each
+stays with the driving agent, same as every other explicit `relay` subcommand. `relay repo sync-dev` is a
+related but separate, repo-level maintenance operation (not run-scoped, not part of any run's lifecycle)
+for git-flow-style target repos: rebasing `dev` onto `main` after a release ships.
 
-**`relay repo setup <run_id> <target_repo_root> [--branch NAME]`** — idempotent. Ensures a dedicated branch
-(default `relay/<run_id>`) exists and is checked out:
+**Pull-request merging remains explicitly out of scope, by design, not by omission.** Unlike setup, commit,
+push, and pr-create — whose mechanics run entirely inside the same agent-supervised loop that already
+validated every change — merging is the point where an external review (a second human's approval, CI or
+branch-protection checks, whatever process the target repo already requires) is supposed to happen, and
+that reviewer often isn't the same agent that ran the loop. Wrapping `gh pr merge` would make an inherently
+judgment-gated step look identically mechanized to steps that genuinely are just mechanics — merge by
+whatever process the target repo already uses, directly via `gh pr merge` or the GitHub UI.
+
+**`relay repo setup <run_id> <target_repo_root> [--branch NAME] [--base-branch NAME] [--remote NAME]`** —
+idempotent. Ensures a dedicated branch (default `relay/<run_id>`) exists and is checked out:
 - already on the target branch: no-op.
-- target branch doesn't exist: create it from the current HEAD and check it out.
+- target branch doesn't exist: create it from `--base-branch` if given (see below), else current HEAD.
 - target branch exists but isn't checked out: check it out.
 - working tree is dirty *and* not already on the target branch: refuse — never silently switches branches
   over uncommitted work. (Dirty while already on the target branch is fine — that's the normal
@@ -277,6 +294,14 @@ explicitly out of scope for this cut, deferred to a later "glue" design.
 
 Run this right after Start, while the tree is still clean — not after Fix has already made changes, since
 the dirty-tree refusal above would then correctly block it.
+
+**`--base-branch NAME [--remote NAME]`** (default remote: `origin`) — for git-flow-style target repos,
+branch from a freshly-fetched `<remote>/<base-branch>` (e.g. `origin/dev`) instead of current HEAD: fetches
+first, then creates the run's branch from that remote-tracking ref, never from local `dev` directly (only
+`sync-dev`, below, ever touches local `dev`). Only affects the *create* path — if the run's branch already
+exists, `--base-branch` is ignored entirely; idempotent re-invocation never resets an existing branch to a
+different base. Omit it to keep the previous behavior exactly (branch from current HEAD, no network access
+at all).
 
 **If `--state-dir`'s default (`./.relay/runs`, relative to wherever `relay` is invoked from) resolves to
 somewhere inside `target_repo_root`**, that directory shows up as untracked in `git status` like anything
@@ -307,6 +332,55 @@ the headline; the structured finding list and `Spec-File:` trailer are still gen
 committing, any dirty files outside the committed set (e.g. a fix that required touching a second, unlisted
 file) are printed as a note — left for the driving agent to handle, not silently dropped.
 
+**`relay repo push <run_id> <target_repo_root> [--branch NAME] [--remote NAME]`** — pushes the run's branch
+(default `relay/<run_id>`) to `--remote` (default `origin`), setting upstream on first push. **Never
+force.** Nothing to push is reported, not an error. A non-fast-forward rejection surfaces verbatim as a
+failure — `relay` never guesses how to reconcile diverged history.
+
+**`relay repo pr create <run_id> <target_repo_root> [--base BRANCH] [--branch NAME] [--title TEXT]`** —
+opens a PR via `gh pr create` (requires `gh` installed and authenticated; shelled out to exactly like `git`,
+no new dependency). Title/body mirror `repo commit`'s message shape (headline, one `- id [severity] summary`
+line per this run's `fixed` findings, `Spec-File:` trailer if set). **Requires the branch already pushed** —
+does not push as a side effect; run `relay repo push` first. This is deliberate: push and PR-create are each
+their own explicit, remote-visible action, and auto-chaining a push would blur which invocation published
+what and could mask a push failure behind a confusing `gh` error. `--base` has no relay-side default
+(omitted → `gh` falls back to the repo's configured default branch) — hardcoding `dev` would assume every
+target repo follows git-flow, which nothing else here assumes. Prints the created PR's URL.
+
+**Post-release dev sync.** `relay repo sync-dev <target_repo_root> [--main-branch main] [--dev-branch dev]
+[--remote NAME] --i-understand-this-rewrites-dev-history` — after a release ships from `main`, rebases `dev`
+onto `main` and force-pushes the result. **Not run-scoped** — no `run_id`, no `--state-dir`.
+
+This is the highest-risk operation `relay` performs: the rebase rewrites `dev`'s history, and the push
+updates the shared remote to match — anyone with `dev` already checked out locally will need to reset
+afterward. Safety design, in execution order:
+
+1. **`--i-understand-this-rewrites-dev-history` required before anything else runs** — not even a fetch
+   happens without it. A deliberately long, specific flag name, not this codebase's existing `--force`/
+   `--yes` (already used elsewhere for the much lower-stakes "overwrite a local output file"), so it can't
+   be typed from habit. A confirmation prompt was considered and rejected — `relay` is meant to be driven
+   headlessly.
+2. **Fetch both `main` and `dev` fresh** — never rebase onto a stale local `main`; fetching `dev`
+   immediately before the operation gives the final force-with-lease push a fresh "expected remote state,"
+   narrowing the fetch-to-push race window.
+3. **Refuse if local `dev` doesn't exactly match `<remote>/dev`** after the fetch — behind or ahead, either
+   way rebasing from a stale/diverged `dev` and force-with-lease-pushing the result risks silently
+   discarding commits that only exist on the remote, with no conflict ever surfacing to flag it.
+   `--force-with-lease` alone only protects against the remote moving *during* this operation, not against
+   it having already moved before the operation started.
+4. **Refuse if the working tree is dirty** — same discipline as `checkout_or_create_branch`.
+5. **Rebase `dev` onto `<remote>/main`.** On conflict, `relay` runs `git rebase --abort` immediately and
+   raises, naming every conflicting file — it never leaves the repo mid-rebase for manual resolution
+   through `relay`. Same "fail loudly, never leave an ambiguous state" discipline as every other failure
+   path in this module, applied to the one operation where an ambiguous state would be most dangerous to
+   leave behind.
+6. **`git push --force-with-lease <remote> dev`** — never bare `--force`; rejected if `<remote>/dev` moved
+   since step 2's fetch, rather than overwriting it.
+
+The only step that touches the remote is the final force-with-lease push, reached only after every guard
+above has passed — the one truly irreversible action in this command is also the last thing that can
+happen, and it's the one git itself refuses to perform blindly.
+
 ## CLI surface
 
 Every harness implementation drives the loop through exactly these subcommands — this is the contract's
@@ -322,8 +396,11 @@ enforcement point. A harness integration should never need to touch `relay`'s in
 - `relay fix run <run_id> <finding_id> <target_repo_root> [--timeout SECONDS] [--provider NAME]`
 - `relay spec draft --request TEXT --context-file PATH [--context-file PATH ...] [--provider NAME] [--timeout SECONDS] [--output PATH] [--force]`
 - `relay review run --decision TEXT [--context-file PATH ...] [--diff-from-branch BRANCH --target-repo-root PATH] [--provider NAME] [--timeout SECONDS] [--output PATH] [--force]` — at least one of `--context-file`/`--diff-from-branch` required
-- `relay repo setup <run_id> <target_repo_root> [--branch NAME]`
+- `relay repo setup <run_id> <target_repo_root> [--branch NAME] [--base-branch NAME] [--remote NAME]`
 - `relay repo commit <run_id> <target_repo_root> [-m TEXT]`
+- `relay repo push <run_id> <target_repo_root> [--branch NAME] [--remote NAME]`
+- `relay repo pr create <run_id> <target_repo_root> [--base BRANCH] [--branch NAME] [--title TEXT]`
+- `relay repo sync-dev <target_repo_root> [--main-branch main] [--dev-branch dev] [--remote NAME] --i-understand-this-rewrites-dev-history`
 - `relay quota status [--provider NAME]`
 - `relay skill install --harness <name> [--target-dir PATH]`
 
@@ -342,9 +419,18 @@ invoking `repo commit` *is* that explicit action, the same way invoking `fix run
 that applies a fix. The driving agent may still do this entirely by hand with plain `git` instead, at its
 discretion; `relay repo commit` is a convenience for the common case, not a requirement.
 
+The same discipline extends to `relay repo push` and `relay repo pr create`: each is its own explicit,
+remote-visible action — invoking `repo push` *is* the explicit act of publishing this run's branch;
+invoking `pr create` *is* the explicit act of proposing it for review. Neither happens as a side effect of
+anything else `relay` does. `relay repo sync-dev` raises that bar further, given its blast radius extends to
+a shared branch other collaborators build on: invocation alone is **not** treated as sufficient confirmation
+the way it is for commit/push/pr-create — it additionally requires the explicit
+`--i-understand-this-rewrites-dev-history` flag, refused before any git command runs at all if that flag is
+absent.
+
 One commit per iteration in the target repo, on a dedicated branch (`relay repo setup`, default branch name
 `relay/<run_id>`) so the project's default branch stays untouched until the run is reviewed and merged.
 `relay repo commit` stages and commits only the files belonging to this run's `fixed` findings that git
 still reports as dirty — see "Repository management" above for exactly how that set is computed. Out of
-scope for both commands, deferred to a later design: pushing, opening or merging a pull request, or any
-interaction with a remote.
+scope for all of the above, by design: merging a pull request — see "Repository management" above for why
+merge specifically stays deferred while push/PR-create/dev-sync do not.

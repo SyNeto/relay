@@ -18,9 +18,16 @@ from relay.engine.extract_spec import SpecExtractionError, extract as extract_sp
 from relay.engine.repo import (
     RepoError,
     build_commit_message,
+    build_pr_body,
     checkout_or_create_branch,
+    create_pull_request,
     diff_against,
     dirty_files,
+    fetch_branch,
+    push_branch,
+    push_force_with_lease,
+    rebase_onto,
+    require_branch_matches_remote,
     select_files_to_commit,
     stage_and_commit,
 )
@@ -294,13 +301,18 @@ def cmd_review_run(args):
 def cmd_repo_setup(args):
     """Idempotently ensure a run's dedicated branch exists and is checked
     out in target_repo_root, before Find/Fix touch any files. See
-    CONTRACT.md's "Repository management" section. Local-only — no push,
-    no remote, no PR.
+    CONTRACT.md's "Repository management" section. --base-branch fetches
+    <remote>/<base-branch> and branches from that ref (e.g. a git-flow
+    dev) instead of current HEAD; omitted, behavior is unchanged.
     """
     _load_state(args.run_id, args)  # just validates run_id exists
     branch = args.branch or f"relay/{args.run_id}"
+    base_branch = None
     try:
-        result = checkout_or_create_branch(args.target_repo_root, branch)
+        if args.base_branch:
+            fetch_branch(args.target_repo_root, args.remote, args.base_branch)
+            base_branch = f"{args.remote}/{args.base_branch}"
+        result = checkout_or_create_branch(args.target_repo_root, branch, base_branch=base_branch)
     except RepoError as e:
         print(str(e), file=sys.stderr)
         sys.exit(1)
@@ -336,6 +348,72 @@ def cmd_repo_commit(args):
     leftover = dirty - files
     if leftover:
         print(f"note: still dirty, not part of this run's fixed findings: {', '.join(sorted(leftover))}", file=sys.stderr)
+
+
+def cmd_repo_push(args):
+    """Push a run's branch to its remote. Never force — a non-fast-forward
+    rejection surfaces as-is; relay never guesses how to reconcile
+    diverged history. See CONTRACT.md's "Repository management" section.
+    """
+    _load_state(args.run_id, args)  # just validates run_id exists
+    branch = args.branch or f"relay/{args.run_id}"
+    try:
+        result = push_branch(args.target_repo_root, args.remote, branch)
+    except RepoError as e:
+        print(str(e), file=sys.stderr)
+        sys.exit(1)
+    print(f"{args.remote}/{branch}: {result}")
+
+
+def cmd_repo_pr_create(args):
+    """Open a PR via `gh` for a run's branch. Requires the branch already
+    pushed (relay repo push) — does not push as a side effect, so a push
+    failure never hides behind a confusing gh error. See CONTRACT.md's
+    "Repository management" section.
+    """
+    state = _load_state(args.run_id, args)
+    fixed = [f for f in state.findings if f["status"] == "fixed"]
+    if not fixed:
+        print("no fixed findings recorded on this run — nothing to describe in the PR", file=sys.stderr)
+        sys.exit(1)
+
+    branch = args.branch or f"relay/{args.run_id}"
+    title = args.title or f"relay: {len(fixed)} finding(s) fixed ({args.run_id})"
+    body = build_pr_body(fixed, spec_file=state.spec_file)
+    try:
+        url = create_pull_request(args.target_repo_root, branch, title, body, base=args.base)
+    except RepoError as e:
+        print(str(e), file=sys.stderr)
+        sys.exit(1)
+    print(url)
+
+
+def cmd_repo_sync_dev(args):
+    """Post-release maintenance: rebase dev onto main and force-with-
+    lease-push the result. Rewrites dev's history — not run-scoped, no
+    run_id, no state involved. See CONTRACT.md's "Repository management"
+    section for the full safety sequence this implements.
+    """
+    if not args.i_understand_this_rewrites_dev_history:
+        print(
+            "refusing: this rebases "
+            f"{args.dev_branch!r} onto {args.main_branch!r} and force-with-lease-pushes the result, "
+            f"rewriting {args.dev_branch!r}'s history for anyone who has it checked out. "
+            "Pass --i-understand-this-rewrites-dev-history to proceed.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    try:
+        fetch_branch(args.target_repo_root, args.remote, args.main_branch)
+        fetch_branch(args.target_repo_root, args.remote, args.dev_branch)
+        require_branch_matches_remote(args.target_repo_root, args.remote, args.dev_branch)
+        rebase_onto(args.target_repo_root, args.dev_branch, f"{args.remote}/{args.main_branch}")
+        push_force_with_lease(args.target_repo_root, args.remote, args.dev_branch)
+    except RepoError as e:
+        print(str(e), file=sys.stderr)
+        sys.exit(1)
+    print(f"{args.dev_branch}: rebased onto {args.main_branch} and force-with-lease-pushed to {args.remote}")
 
 
 def cmd_quota_status(args):
@@ -499,6 +577,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("run_id")
     p.add_argument("target_repo_root", type=Path)
     p.add_argument("--branch", default=None, help="branch name (default: relay/<run_id>)")
+    p.add_argument(
+        "--base-branch",
+        default=None,
+        help="fetch <remote>/<base-branch> and branch from it instead of current HEAD (e.g. dev)",
+    )
+    p.add_argument("--remote", default="origin", help="remote to fetch --base-branch from")
     _state_dir_arg(p)
     p.set_defaults(func=cmd_repo_setup)
 
@@ -510,6 +594,41 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _state_dir_arg(p)
     p.set_defaults(func=cmd_repo_commit)
+
+    p = repo.add_parser("push", help="push a run's branch to its remote (never force)")
+    p.add_argument("run_id")
+    p.add_argument("target_repo_root", type=Path)
+    p.add_argument("--branch", default=None, help="branch name (default: relay/<run_id>)")
+    p.add_argument("--remote", default="origin")
+    _state_dir_arg(p)
+    p.set_defaults(func=cmd_repo_push)
+
+    repo_pr = repo.add_parser("pr", help="pull-request management via gh").add_subparsers(
+        dest="repo_pr_command", required=True
+    )
+    p = repo_pr.add_parser("create", help="open a PR for a run's branch (requires it already pushed)")
+    p.add_argument("run_id")
+    p.add_argument("target_repo_root", type=Path)
+    p.add_argument("--base", default=None, help="PR base branch (default: gh's own configured default)")
+    p.add_argument("--branch", default=None, help="head branch name (default: relay/<run_id>)")
+    p.add_argument("--title", default=None, help="PR title (default: auto-generated from fixed findings)")
+    _state_dir_arg(p)
+    p.set_defaults(func=cmd_repo_pr_create)
+
+    p = repo.add_parser(
+        "sync-dev",
+        help="post-release maintenance: rebase dev onto main and force-with-lease-push (rewrites dev's history)",
+    )
+    p.add_argument("target_repo_root", type=Path)
+    p.add_argument("--main-branch", default="main")
+    p.add_argument("--dev-branch", default="dev")
+    p.add_argument("--remote", default="origin")
+    p.add_argument(
+        "--i-understand-this-rewrites-dev-history",
+        action="store_true",
+        help="required explicit opt-in — this force-pushes a rewritten dev; other collaborators must reset",
+    )
+    p.set_defaults(func=cmd_repo_sync_dev)
 
     quota = sub.add_parser("quota", help="model-provider request volume").add_subparsers(
         dest="quota_command", required=True

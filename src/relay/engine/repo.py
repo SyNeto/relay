@@ -1,11 +1,14 @@
-"""Local git plumbing for a run: an isolated branch to work on, and a
-commit scoped to exactly the files a run's fixed findings actually
-touched. Wraps `git` via subprocess directly -- no third-party git
-library; nothing else in this codebase needs one either. Fails loudly via
-RepoError instead of guessing at branch/merge resolution, silently
-switching branches over uncommitted work, or falling back to `git add
--A`/`-u`. Deliberately local-only: never pushes, never touches a remote
-or a pull request -- that's a later "glue" design's job, not this one's.
+"""Git (and, for pull requests, `gh`) plumbing for a run: an isolated
+branch to work on, a commit scoped to exactly the files a run's fixed
+findings actually touched, and publishing that work -- push, PR
+creation, and post-release branch maintenance. Wraps `git`/`gh` via
+subprocess directly -- no third-party git library; nothing else in this
+codebase needs one either. Fails loudly via RepoError instead of
+guessing at branch/merge resolution, silently switching branches over
+uncommitted work, falling back to `git add -A`/`-u`, or leaving a repo
+mid-rebase. Merging a pull request is deliberately never wrapped here --
+see CONTRACT.md's "Repository management" section for why that line is
+drawn where it is.
 """
 import subprocess
 from pathlib import Path
@@ -17,6 +20,10 @@ class RepoError(Exception):
 
 def _run(repo_root: Path, args: list[str]) -> subprocess.CompletedProcess:
     return subprocess.run(["git", *args], cwd=repo_root, capture_output=True, text=True)
+
+
+def _run_gh(repo_root: Path, args: list[str]) -> subprocess.CompletedProcess:
+    return subprocess.run(["gh", *args], cwd=repo_root, capture_output=True, text=True)
 
 
 def current_branch(repo_root: Path) -> str:
@@ -75,15 +82,50 @@ def dirty_files(repo_root: Path) -> set[str]:
     return files
 
 
-def checkout_or_create_branch(repo_root: Path, name: str) -> str:
+def fetch_branch(repo_root: Path, remote: str, branch: str) -> None:
+    """`git fetch <remote> <branch>` -- updates the remote-tracking ref
+    `<remote>/<branch>` (e.g. origin/dev) without touching any local
+    branch. Raises RepoError verbatim on any failure (network, unknown
+    remote, unknown branch on the remote)."""
+    result = _run(repo_root, ["fetch", remote, branch])
+    if result.returncode != 0:
+        raise RepoError(f"git fetch {remote} {branch} failed in {repo_root}: {result.stderr.strip()}")
+
+
+def push_branch(repo_root: Path, remote: str, branch: str) -> str:
+    """`git push -u <remote> <branch>`. Never force. Returns "pushed" or
+    "up-to-date" (nothing new to push -- not an error). Raises RepoError
+    verbatim on any git failure, including a non-fast-forward rejection
+    (diverged remote history) -- relay never force-pushes a run's own
+    branch and never guesses how to reconcile it; that's the driving
+    agent's call."""
+    before = _run(repo_root, ["rev-parse", f"{remote}/{branch}"])
+    result = _run(repo_root, ["push", "-u", remote, branch])
+    if result.returncode != 0:
+        raise RepoError(f"git push {remote} {branch} failed in {repo_root}: {result.stderr.strip()}")
+    after = _run(repo_root, ["rev-parse", f"{remote}/{branch}"])
+    if before.returncode == 0 and before.stdout == after.stdout:
+        return "up-to-date"
+    return "pushed"
+
+
+def checkout_or_create_branch(repo_root: Path, name: str, base_branch: str | None = None) -> str:
     """Idempotently ensures `name` is checked out in repo_root. Returns
     one of "up-to-date" (already on name), "checked-out" (name existed,
     switched to it), "created" (name didn't exist yet, created from
-    current HEAD and switched). Raises RepoError if the working tree is
-    dirty and repo_root is not already on `name` -- never silently
-    carries uncommitted work across an unrelated branch switch. (Being
-    dirty while already on `name` is fine -- that's the normal
-    in-progress state during Fix/Validate.)"""
+    base_branch -- or current HEAD if base_branch is None -- and
+    switched). Raises RepoError if the working tree is dirty and
+    repo_root is not already on `name` -- never silently carries
+    uncommitted work across an unrelated branch switch. (Being dirty
+    while already on `name` is fine -- that's the normal in-progress
+    state during Fix/Validate.)
+
+    base_branch only affects the create path: if `name` already exists,
+    base_branch is ignored entirely -- idempotent re-invocation never
+    resets or moves an existing branch to a different base. Callers
+    wanting to branch from a remote ref (e.g. a git-flow `dev`) should
+    fetch_branch it first and pass the fetched "<remote>/<branch>" ref
+    here; this function itself never touches the network."""
     current = current_branch(repo_root)
     if current == name:
         return "up-to-date"
@@ -100,7 +142,8 @@ def checkout_or_create_branch(repo_root: Path, name: str) -> str:
             raise RepoError(f"git checkout {name!r} failed: {result.stderr.strip()}")
         return "checked-out"
 
-    result = _run(repo_root, ["checkout", "-b", name])
+    checkout_args = ["checkout", "-b", name] + ([base_branch] if base_branch else [])
+    result = _run(repo_root, checkout_args)
     if result.returncode != 0:
         raise RepoError(f"git checkout -b {name!r} failed: {result.stderr.strip()}")
     return "created"
@@ -155,3 +198,118 @@ def build_commit_message(
     if spec_file:
         lines += ["", f"Spec-File: {spec_file}"]
     return "\n".join(lines)
+
+
+def build_pr_body(
+    fixed_findings: list[dict],
+    spec_file: str | None = None,
+    summary_override: str | None = None,
+) -> str:
+    """The PR body: delegates directly to build_commit_message, whose
+    output shape (headline, one `id [severity] summary` line per
+    finding, Spec-File trailer) is identical to what a PR body needs
+    today. A distinct name, not a bare alias -- the two surfaces'
+    formatting needs are only coincidentally identical and free to
+    diverge later without coupling commit-message formatting to PR
+    formatting."""
+    return build_commit_message(fixed_findings, spec_file=spec_file, summary_override=summary_override)
+
+
+def create_pull_request(repo_root: Path, head: str, title: str, body: str, base: str | None = None) -> str:
+    """`gh pr create --head <head> --title <title> --body <body>` from
+    repo_root, adding `--base <base>` only if given -- omitted, gh falls
+    back to the GitHub repo's own configured default branch, rather than
+    relay assuming every target repo follows one particular branching
+    model. Requires `gh` installed and authenticated, and requires
+    `head` already pushed -- this function does not push as a side
+    effect (see push_branch). gh's own error (auth failure, "no commits
+    between X and Y", "head ref not found") surfaces verbatim as
+    RepoError. Returns the created PR's URL."""
+    args = ["pr", "create", "--head", head, "--title", title, "--body", body]
+    if base:
+        args += ["--base", base]
+    result = _run_gh(repo_root, args)
+    if result.returncode != 0:
+        raise RepoError(f"gh pr create failed in {repo_root}: {result.stderr.strip()}")
+    return result.stdout.strip()
+
+
+def require_branch_matches_remote(repo_root: Path, remote: str, branch: str) -> None:
+    """Raises RepoError unless local `branch`'s tip SHA is identical to
+    `<remote>/<branch>`'s -- neither ahead (unpushed local commits) nor
+    behind (remote has commits not yet fetched-and-merged here). No-op
+    when they match. Callers should fetch_branch the remote ref
+    immediately before calling this -- it only compares whatever refs
+    already exist locally, it doesn't fetch anything itself.
+
+    Exists because --force-with-lease alone only protects against the
+    remote moving *during* an operation, not against the local branch
+    already being stale or diverged *before* it started -- rebasing and
+    force-with-lease-pushing from a stale local branch risks silently
+    discarding remote-only commits, with no conflict ever surfacing to
+    flag it."""
+    local = _run(repo_root, ["rev-parse", branch])
+    if local.returncode != 0:
+        raise RepoError(f"couldn't resolve local branch {branch!r} in {repo_root}: {local.stderr.strip()}")
+    remote_ref = _run(repo_root, ["rev-parse", f"{remote}/{branch}"])
+    if remote_ref.returncode != 0:
+        raise RepoError(f"couldn't resolve {remote}/{branch} in {repo_root}: {remote_ref.stderr.strip()}")
+    if local.stdout != remote_ref.stdout:
+        raise RepoError(
+            f"{branch!r} ({local.stdout.strip()[:12]}) does not match {remote}/{branch} "
+            f"({remote_ref.stdout.strip()[:12]}) -- pull or push to reconcile before syncing"
+        )
+
+
+def rebase_onto(repo_root: Path, branch: str, onto_ref: str) -> str:
+    """Checks out `branch`, then `git rebase <onto_ref>`. Raises
+    RepoError up front if the working tree is dirty, before touching
+    anything -- same discipline as checkout_or_create_branch, never
+    rebase over uncommitted work. On success returns "rebased".
+
+    On conflict: captures the conflicting files (`git diff --name-only
+    --diff-filter=U`) before running `git rebase --abort`, then raises
+    RepoError naming them -- relay never leaves the repo mid-rebase for
+    manual resolution through relay itself. This is the one place in
+    this module where leaving an ambiguous state would be most
+    dangerous (a shared branch, possibly no human immediately present
+    to notice), so it gets the strictest version of the "fail loudly,
+    never leave an ambiguous state" discipline every other function
+    here already uses. If rebase fails for a reason other than a
+    conflict (e.g. onto_ref doesn't exist), there's nothing to abort;
+    git's own error surfaces directly."""
+    if is_dirty(repo_root):
+        raise RepoError(f"{repo_root} has uncommitted changes -- commit or stash before rebasing")
+
+    checkout = _run(repo_root, ["checkout", branch])
+    if checkout.returncode != 0:
+        raise RepoError(f"git checkout {branch!r} failed: {checkout.stderr.strip()}")
+
+    result = _run(repo_root, ["rebase", onto_ref])
+    if result.returncode == 0:
+        return "rebased"
+
+    conflicts = _run(repo_root, ["diff", "--name-only", "--diff-filter=U"])
+    conflicting_files = conflicts.stdout.split()
+    if conflicting_files:
+        _run(repo_root, ["rebase", "--abort"])
+        raise RepoError(
+            f"rebase of {branch!r} onto {onto_ref!r} conflicted on: {', '.join(conflicting_files)} "
+            f"-- aborted, {branch!r} is unchanged; resolve the conflict by hand and retry"
+        )
+    raise RepoError(f"git rebase {onto_ref!r} failed in {repo_root}: {result.stderr.strip()}")
+
+
+def push_force_with_lease(repo_root: Path, remote: str, branch: str) -> str:
+    """`git push --force-with-lease <remote> <branch>` -- the only
+    force-push in this module, and only ever --force-with-lease, never
+    bare --force: rejected instead of overwriting if `<remote>/<branch>`
+    moved since this repo's last recorded knowledge of it. Returns
+    "pushed". Raises RepoError on any failure, including the lease
+    rejection."""
+    result = _run(repo_root, ["push", "--force-with-lease", remote, branch])
+    if result.returncode != 0:
+        raise RepoError(
+            f"git push --force-with-lease {remote} {branch} failed in {repo_root}: {result.stderr.strip()}"
+        )
+    return "pushed"
