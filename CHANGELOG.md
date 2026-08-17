@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.0.0-alpha — promoted from the 0.x dogfooding arc
+
+Promotes `relay` from `0.x` to `1.0.0-alpha`, closing out a deliberate dogfooding arc: every 0.9.x/0.10.0
+release in this arc was itself built by running `relay` against its own repo — spec draft, independent
+review, Find→Fix→Validate, and publish — the same loop `relay` exists to give other projects. Five real
+frictions surfaced this way each got a filed issue, a propose→review→adjust cycle, and a shipped fix:
+release bookkeeping coverage (`--also-commit`, [#2](https://github.com/SyNeto/relay/issues/2)),
+retry/backoff on transient provider failures ([#3](https://github.com/SyNeto/relay/issues/3)), actionable
+errors instead of raw git/gh failures when a run's branch doesn't exist ([#4](https://github.com/SyNeto/relay/issues/4)),
+a warning when a `Spec-File:` trailer would dangle in a real commit/PR ([#5](https://github.com/SyNeto/relay/issues/5)),
+and `relay repo check-integration` for cross-PR version-collision detection ([#10](https://github.com/SyNeto/relay/issues/10)).
+
+**Known limitation at this milestone, not a surprise gap:** provider fallback isn't implemented. `relay`
+retries a transient failure on the *configured* provider (bounded backoff, ~6 minutes worst case at
+defaults) but does not automatically switch to a different provider if one is persistently down — a
+driving agent hitting that has to retry manually with a different `--provider`. Documented in
+`CONTRACT.md`'s "Model connector" section (added alongside #3's fix) and now called out in README.md's
+Status section too, so it's visible without reading the full protocol document first.
+
+No code changes beyond a README.md Status update — this release is the milestone marker for the arc above,
+not a new feature or fix in itself.
+
 ## 0.10.0 — `relay repo check-integration` + a narrowed version-bump reminder
 
 Fixes [#10](https://github.com/SyNeto/relay/issues/10): two real version-number collisions this session

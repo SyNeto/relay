@@ -124,7 +124,11 @@ model calls identically regardless of which harness is driving it.
 
 ## Status
 
-Active alpha. Run→spec traceability, local git plumbing (branch isolation, scoped commits), and now
+1.0.0-alpha. Run→spec traceability, local git plumbing (branch isolation, scoped commits), and now
 publishing (push, PR creation, git-flow post-release `dev` sync) are all handled. Merging a pull request
 stays deliberately manual — not deferred-for-now, but out of scope by design: see CONTRACT.md's
-"Repository management" section. See `CHANGELOG.md` for release history and current phase.
+"Repository management" section. The one known gap at this milestone is provider fallback: relay retries
+a transient failure on the configured provider (bounded backoff, ~6 minutes worst case) but does not
+automatically switch to a different provider if one is persistently down — a driving agent hitting that
+has to retry manually with a different `--provider`. See CONTRACT.md's "Model connector" section for the
+full retry policy. See `CHANGELOG.md` for release history and current phase.
