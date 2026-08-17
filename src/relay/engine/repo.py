@@ -149,13 +149,36 @@ def checkout_or_create_branch(repo_root: Path, name: str, base_branch: str | Non
     return "created"
 
 
-def select_files_to_commit(fixed_finding_files: set[str], dirty: set[str]) -> set[str]:
-    """The intersection `repo commit` actually stages: this run's fixed
-    findings' files that git still reports as dirty. Pure set logic, no
-    subprocess -- deliberately does not know or care how a file became
-    fixed (relay fix run, or by hand per Validate's guidance); only
-    finding.status and live git state matter."""
-    return fixed_finding_files & dirty
+def select_files_to_commit(
+    fixed_finding_files: set[str], dirty: set[str], also_files: set[str] | None = None
+) -> set[str]:
+    """The set `repo commit` actually stages: this run's fixed findings'
+    files that git still reports as dirty, unioned with also_files (e.g.
+    release bookkeeping -- CHANGELOG.md, a version bump -- not tied to
+    any finding). Pure set logic, no subprocess -- deliberately does not
+    know or care how a finding file became fixed (relay fix run, or by
+    hand per Validate's guidance); only finding.status and live git
+    state matter.
+
+    also_files is unioned in, not substituted -- the finding-file
+    intersection is untouched, and also_files=None (the default)
+    produces byte-identical behavior to the pre-also_files signature.
+    Each also_files entry must still be dirty: this is the safety net
+    that keeps also_files from being a way to stage arbitrary
+    non-dirty files. Raises RepoError naming every non-dirty also_files
+    entry -- never silently drops one. Callers must normalize
+    also_files (and dirty) to the same path convention before calling;
+    this function does no path normalization itself."""
+    selected = fixed_finding_files & dirty
+    if also_files:
+        not_dirty = also_files - dirty
+        if not_dirty:
+            raise RepoError(
+                "--also-commit files not dirty (nothing to commit for them): "
+                f"{', '.join(sorted(not_dirty))}"
+            )
+        selected |= also_files
+    return selected
 
 
 def stage_and_commit(repo_root: Path, files: set[str] | list[str], message: str) -> str:
@@ -186,15 +209,28 @@ def build_commit_message(
     fixed_findings: list[dict],
     spec_file: str | None = None,
     summary_override: str | None = None,
+    also_files: list[str] | None = None,
 ) -> str:
     """Builds the structured message for repo commit: a headline (or
     summary_override, if given), one `id [severity] summary` line per
-    finding in fixed_findings, and a trailing `Spec-File: <path>` line
-    if spec_file is set. summary_override replaces only the headline;
-    the per-finding lines and Spec-File trailer are still generated."""
+    finding in fixed_findings, an `Also committed: <paths>` line for
+    also_files not already covered by a finding, and a trailing
+    `Spec-File: <path>` line if spec_file is set. summary_override
+    replaces only the headline; every other section is still generated.
+
+    also_files must already be normalized to the same path convention
+    as fixed_findings' `file` values -- this function does string
+    comparison for dedup, not path resolution. A file that's both a
+    fixed finding's file and named in also_files appears only in the
+    per-finding list, never doubled into "Also committed"."""
     headline = summary_override or f"relay: {len(fixed_findings)} finding(s) fixed"
     lines = [headline, ""]
     lines += [f"- {f['id']} [{f['severity']}] {f['summary']}" for f in fixed_findings]
+    if also_files:
+        finding_files = {f["file"] for f in fixed_findings}
+        also_only = [p for p in also_files if p not in finding_files]
+        if also_only:
+            lines += ["", f"Also committed: {', '.join(also_only)}"]
     if spec_file:
         lines += ["", f"Spec-File: {spec_file}"]
     return "\n".join(lines)

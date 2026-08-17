@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.9.3 — `repo commit --also-commit` for release bookkeeping
+
+Fixes [#2](https://github.com/SyNeto/relay/issues/2): `relay repo commit` only ever staged files tied to a
+run's `fixed` findings, so release bookkeeping (`pyproject.toml`, `src/relay/__init__.py`, `CHANGELOG.md`)
+always fell outside its mechanized path — not hypothetical, it hit every release this project has shipped,
+including finishing 0.9.1's own fix and resolving the 0.9.1/0.9.2 version-number collision, both requiring
+manual `git add`/`git commit` entirely outside `relay`.
+
+Went through the full propose → review → adjust process again: `relay spec draft` recommended an opt-in
+flag; `relay review run` gave it an independent critique that changed two real design decisions —
+repeatable `--also-commit PATH [--also-commit PATH ...]` instead of comma-separated (file paths can contain
+commas, unlike this codebase's other comma-separated flags, which are all short enum tokens that can't),
+and explicitly naming `repo pr create`'s existing `if not fixed: sys.exit(1)` guard as a real, deliberate
+scope boundary rather than an implicit trap — a pure-bookkeeping run can now `repo commit` through relay
+but still needs manual `gh pr create`. Along the way, `nim` hit another real, persistent 429 during the
+review call — 0.9.1's retry logic correctly retried twice with backoff before failing loudly, a good live
+confirmation that release actually works; fell back to `opencode-go` for the review itself.
+
+`select_files_to_commit` and `build_commit_message` both gain an `also_files` parameter — unioned into the
+existing fixed-finding intersection, never substituted for it; `also_files=None` (the default) is
+byte-identical to prior behavior. `--also-commit` files must still be dirty — fails loudly naming every
+non-dirty one, same "never guess" discipline as everything else in this module — but no longer need to be
+tied to any finding, so a run with zero fixed findings and only `--also-commit` files now produces a valid
+commit (this is the common case for pure bookkeeping). New CLI-layer path normalization + containment check
+(`--also-commit ../../etc/passwd`-style paths fail loudly before any git command runs) keeps
+`select_files_to_commit` itself pure set logic with no filesystem access, matching its existing contract.
+Commit messages gain an `Also committed: <paths>` line, deduplicated against the per-finding list by
+(normalized) file path.
+
+Validated live doing exactly what issue #3's fix and the version collision needed by hand: a scratch repo,
+zero recorded findings, `repo commit --also-commit CHANGELOG.md --also-commit VERSION.txt` — succeeded
+where it would have failed before, commit contains exactly those two files. Both new failure paths
+(escaping path, non-dirty `--also-commit` file) verified live, failing loudly before any git mutation.
+
 ## 0.9.2 — Skill coverage for push, PR creation, and dev sync
 
 The fast-follow deferred at the end of 0.9.0, same split as 0.6.0/0.6.1: `SKILL.md`/`AGENT.md` shipped

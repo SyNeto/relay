@@ -349,23 +349,58 @@ def cmd_repo_setup(args):
     print(f"{branch}: {result}")
 
 
+def _normalize_also_commit_paths(paths: list[str], target_repo_root: Path) -> list[str]:
+    """Resolves each --also-commit path relative to target_repo_root,
+    strips any leading "./" so results match dirty_files' plain
+    repo-relative convention, and fails loudly if a path would escape
+    target_repo_root -- defense-in-depth: the dirty-check downstream
+    would already reject a file outside the repo, but a clear
+    containment error beats a confusing "not dirty" one."""
+    root = target_repo_root.resolve()
+    normalized = []
+    for raw in paths:
+        resolved = (target_repo_root / raw).resolve()
+        try:
+            rel = resolved.relative_to(root)
+        except ValueError:
+            raise RepoError(f"--also-commit path escapes target_repo_root: {raw!r}")
+        normalized.append(str(rel))
+    return normalized
+
+
 def cmd_repo_commit(args):
     """Stage and commit exactly this run's fixed-finding files that are
-    still dirty. Local-only — no push, no remote, no PR; see
+    still dirty, plus any --also-commit files explicitly named (e.g.
+    release bookkeeping not tied to any finding -- CHANGELOG.md, a
+    version bump). Local-only — no push, no remote, no PR; see
     CONTRACT.md's "Repository management" section for the file-selection
     algorithm (intersection of fixed-finding files and live git dirty
-    state, deliberately not the finding's iteration field).
+    state, deliberately not the finding's iteration field, unioned with
+    --also-commit files which must also be dirty).
     """
     state = _load_state(args.run_id, args)
     fixed = [f for f in state.findings if f["status"] == "fixed"]
     dirty = dirty_files(args.target_repo_root)
-    files = select_files_to_commit({f["file"] for f in fixed}, dirty)
+
+    try:
+        also_commit = _normalize_also_commit_paths(args.also_commit or [], args.target_repo_root)
+        files = select_files_to_commit({f["file"] for f in fixed}, dirty, also_files=set(also_commit))
+    except RepoError as e:
+        print(str(e), file=sys.stderr)
+        sys.exit(1)
+
     if not files:
-        print("nothing to commit: no fixed finding's file is currently dirty", file=sys.stderr)
+        print(
+            "nothing to commit: no fixed finding's file is currently dirty, "
+            "and no --also-commit file was given",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     committed_findings = [f for f in fixed if f["file"] in files]
-    message = build_commit_message(committed_findings, spec_file=state.spec_file, summary_override=args.message)
+    message = build_commit_message(
+        committed_findings, spec_file=state.spec_file, summary_override=args.message, also_files=also_commit
+    )
     try:
         sha = stage_and_commit(args.target_repo_root, files, message)
     except RepoError as e:
@@ -624,6 +659,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("target_repo_root", type=Path)
     p.add_argument(
         "-m", "--message", default=None, help="override the commit headline (structured body is still auto-generated)"
+    )
+    p.add_argument(
+        "--also-commit",
+        action="append",
+        default=None,
+        help="also stage+commit this file, not tied to any finding (e.g. release bookkeeping — "
+        "CHANGELOG.md, a version bump); repeatable; must be dirty, fails loudly otherwise",
     )
     _state_dir_arg(p)
     p.set_defaults(func=cmd_repo_commit)

@@ -331,13 +331,14 @@ else — the dirty-tree checks above have no special-case awareness of it. Eithe
 target repo (the convention `relay`'s own repo already follows), or pass `--state-dir` pointing outside
 `target_repo_root`, so run state itself never trips a dirty-tree refusal.
 
-**`relay repo commit <run_id> <target_repo_root> [-m TEXT]`** — stages and commits exactly the files this
-run is responsible for, nothing else:
+**`relay repo commit <run_id> <target_repo_root> [-m TEXT] [--also-commit PATH ...]`** — stages and commits
+exactly the files this run is responsible for, nothing else:
 1. The *fixed-finding file set*: the `file` of every finding in the run whose `status` is `fixed`.
 2. The *dirty set*: every path git currently reports as changed (staged, unstaged, or untracked).
-3. Stages and commits their **intersection** — one `git add` naming every path explicitly, never
-   `git add -A`/`-u`. Files outside the intersection are left untouched.
-4. Refuses loudly (non-zero exit, no commit attempted) if the intersection is empty.
+3. Stages and commits their **intersection**, unioned with any `--also-commit` files (see below) — one
+   `git add` naming every path explicitly, never `git add -A`/`-u`. Files outside this set are left
+   untouched.
+4. Refuses loudly (non-zero exit, no commit attempted) if the resulting set is empty.
 
 This deliberately does not use the finding's `iteration` field — `record_finding` stamps it once, at Find
 time, and never updates it, so a finding recorded in iteration 1 but not fixed until iteration 3 would
@@ -348,11 +349,39 @@ Validate's "fix it by hand if it's simple" guidance) and marked `fixed` via `rel
 indistinguishable to this algorithm — both are `status: fixed` findings whose `file` is dirty, so both are
 picked up identically.
 
+**`--also-commit PATH` (repeatable)** — stages and commits a file that isn't tied to any finding, e.g.
+release bookkeeping (`CHANGELOG.md`, a version bump in `pyproject.toml`). Repeatable, not comma-separated —
+file paths can contain commas, unlike this contract's other comma-separated list flags (`--gate-severities`),
+so a single `--also-commit PATH,PATH`-style flag would silently split a path containing a comma into the
+wrong files. Every `--also-commit` path is resolved relative to `target_repo_root` and checked to stay
+inside it (fails loudly on an escaping path, e.g. `../../etc/passwd`, before any git command runs) — then
+**must still be dirty**, exactly like a finding's file: `repo commit` fails loudly naming every non-dirty
+`--also-commit` path, never silently skipping one. `--also-commit` files are **unioned into** the selected
+set, not substituted for the finding-file intersection — a run with zero fixed findings and only
+`--also-commit` files still produces a valid commit (this is the common case for pure release-bookkeeping
+work, which has no findings loop at all).
+
+This is a deliberate, explicit narrowing of the safety model for exactly the files named this way: a
+finding's file must be *both* tied to a `fixed` finding *and* dirty (two conditions); an `--also-commit`
+file only needs to be dirty (one condition) — the driving agent naming it explicitly takes the place of the
+finding-membership check. `relay` still never guesses which files are "release bookkeeping" — the agent
+says so, for exactly the files it names.
+
 Commit message: an auto-generated body listing each committed finding's `id`, `severity`, and `summary`
-(one line each), plus a `Spec-File: <path>` trailer if the run's `spec_file` is set. `-m TEXT` replaces only
-the headline; the structured finding list and `Spec-File:` trailer are still generated and appended. After
+(one line each), an `Also committed: <paths>` line listing any `--also-commit` files not already covered by
+a finding (a file that's both a fixed finding's file and named via `--also-commit` appears only in the
+per-finding list, not doubled into this line), and a `Spec-File: <path>` trailer if the run's `spec_file`
+is set. `-m TEXT` replaces only the headline; every other section is still generated and appended. After
 committing, any dirty files outside the committed set (e.g. a fix that required touching a second, unlisted
 file) are printed as a note — left for the driving agent to handle, not silently dropped.
+
+**`relay repo pr create` does not yet support `--also-commit`.** A pure-bookkeeping run (zero fixed
+findings, only `--also-commit` files) can `repo commit` through relay but cannot `repo pr create` — that
+command still requires at least one fixed finding to describe in the PR body, and refuses otherwise. The
+agent needs a manual `gh pr create` for that step. This is a deliberate scope boundary for this capability,
+not an oversight — extending `pr create` to describe `--also-commit` files is a separate, later design
+(does the PR body list them? where does that information persist between the commit and the PR-create
+call?), named explicitly here rather than discovered by surprise.
 
 **`relay repo push <run_id> <target_repo_root> [--branch NAME] [--remote NAME]`** — pushes the run's branch
 (default `relay/<run_id>`) to `--remote` (default `origin`), setting upstream on first push. **Never
@@ -419,7 +448,7 @@ enforcement point. A harness integration should never need to touch `relay`'s in
 - `relay spec draft --request TEXT --context-file PATH [--context-file PATH ...] [--provider NAME] [--timeout SECONDS] [--output PATH] [--force] [--max-retries N | --no-retry] [--retry-base-delay SECONDS]`
 - `relay review run --decision TEXT [--context-file PATH ...] [--diff-from-branch BRANCH --target-repo-root PATH] [--provider NAME] [--timeout SECONDS] [--output PATH] [--force] [--max-retries N | --no-retry] [--retry-base-delay SECONDS]` — at least one of `--context-file`/`--diff-from-branch` required
 - `relay repo setup <run_id> <target_repo_root> [--branch NAME] [--base-branch NAME] [--remote NAME]`
-- `relay repo commit <run_id> <target_repo_root> [-m TEXT]`
+- `relay repo commit <run_id> <target_repo_root> [-m TEXT] [--also-commit PATH ...]`
 - `relay repo push <run_id> <target_repo_root> [--branch NAME] [--remote NAME]`
 - `relay repo pr create <run_id> <target_repo_root> [--base BRANCH] [--branch NAME] [--title TEXT]`
 - `relay repo sync-dev <target_repo_root> [--main-branch main] [--dev-branch dev] [--remote NAME] --i-understand-this-rewrites-dev-history`
@@ -453,6 +482,7 @@ absent.
 One commit per iteration in the target repo, on a dedicated branch (`relay repo setup`, default branch name
 `relay/<run_id>`) so the project's default branch stays untouched until the run is reviewed and merged.
 `relay repo commit` stages and commits only the files belonging to this run's `fixed` findings that git
-still reports as dirty — see "Repository management" above for exactly how that set is computed. Out of
-scope for all of the above, by design: merging a pull request — see "Repository management" above for why
-merge specifically stays deferred while push/PR-create/dev-sync do not.
+still reports as dirty, plus any `--also-commit` files the driving agent explicitly names (also required to
+be dirty) — see "Repository management" above for exactly how that set is computed. Out of scope for all of
+the above, by design: merging a pull request — see "Repository management" above for why merge specifically
+stays deferred while push/PR-create/dev-sync do not.

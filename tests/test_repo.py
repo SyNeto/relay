@@ -262,6 +262,71 @@ def test_build_commit_message_summary_override_replaces_only_headline():
     assert "Spec-File: docs/SPEC.md" in message
 
 
+def test_select_files_to_commit_also_files_union_when_dirty():
+    result = select_files_to_commit({"a"}, {"a", "CHANGELOG.md"}, also_files={"CHANGELOG.md"})
+
+    assert result == {"a", "CHANGELOG.md"}
+
+
+def test_select_files_to_commit_also_files_alone_with_no_finding_files():
+    result = select_files_to_commit(set(), {"CHANGELOG.md"}, also_files={"CHANGELOG.md"})
+
+    assert result == {"CHANGELOG.md"}
+
+
+def test_select_files_to_commit_also_files_not_dirty_raises():
+    with pytest.raises(RepoError, match="CHANGELOG.md"):
+        select_files_to_commit({"a"}, {"a"}, also_files={"CHANGELOG.md"})
+
+
+def test_select_files_to_commit_also_files_partial_dirty_names_only_missing():
+    with pytest.raises(RepoError) as exc_info:
+        select_files_to_commit({"a"}, {"a", "CHANGELOG.md"}, also_files={"CHANGELOG.md", "pyproject.toml"})
+
+    assert "pyproject.toml" in str(exc_info.value)
+    assert "CHANGELOG.md" not in str(exc_info.value)
+
+
+def test_select_files_to_commit_also_files_overlap_with_finding_file():
+    result = select_files_to_commit({"CHANGELOG.md"}, {"CHANGELOG.md"}, also_files={"CHANGELOG.md"})
+
+    assert result == {"CHANGELOG.md"}
+
+
+def test_select_files_to_commit_also_files_none_is_unchanged_behavior():
+    assert select_files_to_commit({"a"}, {"a"}, also_files=None) == select_files_to_commit({"a"}, {"a"})
+
+
+def test_build_commit_message_also_files_section():
+    findings = [{"id": "f1", "severity": "HIGH", "summary": "fixed the thing", "file": "a.md"}]
+
+    message = build_commit_message(findings, also_files=["CHANGELOG.md", "pyproject.toml"])
+
+    assert "Also committed: CHANGELOG.md, pyproject.toml" in message
+
+
+def test_build_commit_message_also_files_dedup_against_finding_file():
+    findings = [{"id": "f1", "severity": "HIGH", "summary": "fixed the thing", "file": "CHANGELOG.md"}]
+
+    message = build_commit_message(findings, also_files=["CHANGELOG.md"])
+
+    assert "- f1 [HIGH] fixed the thing" in message
+    assert "Also committed:" not in message
+
+
+def test_build_commit_message_also_files_with_zero_findings():
+    message = build_commit_message([], also_files=["CHANGELOG.md"], summary_override="release bookkeeping")
+
+    assert message.splitlines()[0] == "release bookkeeping"
+    assert "Also committed: CHANGELOG.md" in message
+
+
+def test_build_commit_message_also_files_none_omits_section():
+    findings = [{"id": "f1", "severity": "HIGH", "summary": "fixed the thing"}]
+
+    assert "Also committed:" not in build_commit_message(findings, also_files=None)
+
+
 def test_diff_against_shows_changes_since_divergence(tmp_path: Path):
     repo = _git_repo(tmp_path)
     base = current_branch(repo)
@@ -523,3 +588,38 @@ def test_push_force_with_lease_rejected_when_remote_moved_since_last_fetch(tmp_p
 
     with pytest.raises(RepoError):
         push_force_with_lease(seed, "origin", branch)
+
+
+def test_repo_commit_with_findings_and_also_files_real_repo(tmp_path: Path):
+    repo = _git_repo(tmp_path)
+    (repo / "a.md").write_text("changed a\n")
+    (repo / "CHANGELOG.md").write_text("changed changelog\n")
+    _git(repo, "add", "CHANGELOG.md")  # both staged and unstaged should still show up as dirty
+
+    dirty = dirty_files(repo)
+    files = select_files_to_commit({"a.md"}, dirty, also_files={"CHANGELOG.md"})
+    message = build_commit_message(
+        [{"id": "f1", "severity": "HIGH", "summary": "fixed a", "file": "a.md"}],
+        also_files=["CHANGELOG.md"],
+    )
+
+    sha = stage_and_commit(repo, files, message)
+
+    committed = _git(repo, "show", "--name-only", "--format=", sha).split()
+    assert sorted(committed) == ["CHANGELOG.md", "a.md"]
+    commit_message = _git(repo, "show", "-s", "--format=%B", sha)
+    assert "- f1 [HIGH] fixed a" in commit_message
+    assert "Also committed: CHANGELOG.md" in commit_message
+
+
+def test_repo_commit_also_files_not_dirty_leaves_repo_unchanged(tmp_path: Path):
+    repo = _git_repo(tmp_path)
+    (repo / "a.md").write_text("changed a\n")
+    head_before = _git(repo, "rev-parse", "HEAD").strip()
+
+    dirty = dirty_files(repo)
+    with pytest.raises(RepoError):
+        select_files_to_commit({"a.md"}, dirty, also_files={"CHANGELOG.md"})  # CHANGELOG.md isn't dirty
+
+    assert _git(repo, "rev-parse", "HEAD").strip() == head_before
+    assert is_dirty(repo)  # a.md's change is still sitting there, untouched
