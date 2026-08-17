@@ -39,6 +39,46 @@ AGENT.md addition that dropped the file's own backtick convention for command re
 caught and corrected during 0.9.4's Validate pass. Live-verified all three warning paths (outside, untracked
 suppressed, untracked unsuppressed) against real scratch git repos before publishing.
 
+## 0.9.4 — Actionable errors on `repo push`/`repo pr create` when the default branch doesn't exist
+
+Fixes [#4](https://github.com/SyNeto/relay/issues/4): a worktree with a plain feature-branch name (this
+project's own dev convention), `repo setup` skipped, and `relay repo push` failing with git's raw `src
+refspec relay/<run_id> does not match any` — because push defaulted to `relay/<run_id>`, never created.
+
+Went through the same propose → review → adjust process, and the review reframed the fix's shape, not just
+its details: the failure happened *with the relevant documentation already in place* — more docs in the
+same location wouldn't obviously have prevented it. The review also caught that the proposal's own optional
+follow-up (a richer `repo setup` no-op message) was mis-aimed — `repo setup` was *skipped* in the actual
+failure, so a message on a command that was never called couldn't have helped. The real root cause: `repo
+setup`'s `relay/<run_id>` default is prescriptive ("create this if missing"); `repo push`/`repo pr
+create`'s same default is descriptive ("push this, assuming it exists") — reusing one default value across
+two different default semantics is a code property, not a documentation gap. `nim` hit a third persistent
+429 this session during the review call; `opencode-go` picked it up.
+
+New `_require_branch_exists()` in `engine/repo.py`, called first thing in both `push_branch` and
+`create_pull_request`: raises a clear, actionable `RepoError` naming the actual current branch and
+suggesting `--branch <current>` (or `relay repo setup`) when the target/head branch doesn't exist locally —
+instead of a raw git/gh error surfacing verbatim. Deliberately **not** falling back to the current branch
+automatically — that would be `relay` guessing which branch the caller meant, the exact thing "never guess,
+fail loudly" exists to prevent. CONTRACT.md's warning is placed where an agent invoking the *failing*
+commands will actually read it (`repo push`/`repo pr create` subsections), not only under `repo setup`,
+which an agent following the "skip it" path would never open. `repo setup`'s own subsection is now
+opinionated for relay-run worktrees specifically: name them `relay/<run_id>` (real traceability value a
+short feature name doesn't have) so the naming converges and `repo setup` becomes a harmless no-op — verified
+directly that `repo setup`'s implementation does nothing beyond `git checkout`/`git checkout -b`, no hidden
+side state, so this claim holds. Two more edge cases named explicitly rather than left implicit: `--base-branch`
+is silently inert once the worktree's branch already exists, and `repo commit`'s branch-name-agnostic design
+(confirmed useful in practice — issue #2's own fix was committed on a plain, non-`relay/`-prefixed branch)
+means a wrong `run_id` on the right branch would silently misattribute a commit, a known, accepted limitation.
+
+Implemented end to end through `relay`'s own Find→Fix→Validate loop this time, not hand-written — 11
+findings (the code fix, five CONTRACT.md subsections, both skill files' Start step, and two new test cases)
+all went through `relay fix run` via `opencode-go`, validated individually (one CONTRACT.md diff needed a
+hand rewrap after insertion broke the file's line-width convention, one skill file needed a hand fix for a
+missed backtick), and committed in one shot via `relay repo commit` — the first fully findings-driven commit
+in this project's own dogfooding history, no `--also-commit` needed since every changed file traced to a
+finding.
+
 ## 0.9.3 — `repo commit --also-commit` for release bookkeeping
 
 Fixes [#2](https://github.com/SyNeto/relay/issues/2): `relay repo commit` only ever staged files tied to a

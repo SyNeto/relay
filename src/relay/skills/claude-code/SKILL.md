@@ -106,6 +106,10 @@ not already clear from context (e.g. `CRITICAL,HIGH` first, `MEDIUM,LOW` in a la
    Right after Start, while the tree is still clean, `relay repo setup <run_id> <target_repo_root>` isolates
    this run's work on its own branch (default `relay/<run_id>`) before Find/Fix touch anything — also
    optional, see step 5 (Commit) for the matching `relay repo commit`.
+   If already in a dedicated worktree, name its branch `relay/<run_id>` so the naming converges
+   (`relay repo setup` becomes a no-op, `relay repo push`/`relay repo pr create` defaults need no extra
+   flags) — otherwise skip `relay repo setup` and always pass `--branch` explicitly to `relay repo push`
+   and `relay repo pr create`.
 
 2. **Find** (you). Review the target — first iteration is a fresh pass, or a decomposition of the spec from
    the lifecycle above; later iterations focus on files touched by the previous iteration's fixes (did the
