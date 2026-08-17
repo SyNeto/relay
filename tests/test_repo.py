@@ -19,6 +19,7 @@ from relay.engine.repo import (
     rebase_onto,
     require_branch_matches_remote,
     select_files_to_commit,
+    spec_file_tracking_status,
     stage_and_commit,
 )
 
@@ -623,3 +624,25 @@ def test_repo_commit_also_files_not_dirty_leaves_repo_unchanged(tmp_path: Path):
 
     assert _git(repo, "rev-parse", "HEAD").strip() == head_before
     assert is_dirty(repo)  # a.md's change is still sitting there, untouched
+
+
+def test_spec_file_tracking_status_tracked(tmp_path):
+    repo = _git_repo(tmp_path)
+    assert spec_file_tracking_status(repo, "a.md") == "tracked"
+
+
+def test_spec_file_tracking_status_untracked(tmp_path):
+    repo = _git_repo(tmp_path)
+    (repo / "new.md").write_text("# New")
+    assert spec_file_tracking_status(repo, "new.md") == "untracked"
+
+
+def test_spec_file_tracking_status_outside(tmp_path):
+    repo = _git_repo(tmp_path)
+    outside = tmp_path / "outside.md"
+    outside.write_text("# Outside")
+    assert spec_file_tracking_status(repo, outside) == "outside"
+
+
+def test_spec_file_tracking_status_unknown_when_not_a_git_repo(tmp_path):
+    assert spec_file_tracking_status(tmp_path, "anything.md") == "unknown"

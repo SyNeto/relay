@@ -58,6 +58,9 @@ you or the user are genuinely unsure about:
    ```
    Review the draft yourself before it's saved anywhere permanent — same rule as the fix loop's Validate: a
    model's draft is a starting point you're accountable for, not a finished artifact.
+   When the run is headed toward a real publish, move the drafted spec into the target repo (e.g. `docs/specs/`)
+   before referencing it with `run start --spec-file` — otherwise `repo commit`/`repo pr create` will warn that
+   the `Spec-File:` trailer points nowhere anyone else can resolve.
 
 4. **Execute it** — decompose the (now-reviewed) spec into findings and run the loop below. Which parts of
    the spec become which findings is still your judgment call; `relay` has no opinion about what a spec

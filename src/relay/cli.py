@@ -29,6 +29,7 @@ from relay.engine.repo import (
     rebase_onto,
     require_branch_matches_remote,
     select_files_to_commit,
+    spec_file_tracking_status,
     stage_and_commit,
 )
 from relay.engine.state import DEFAULT_GATE_SEVERITIES, RunState, default_state_dir, list_run_ids
@@ -368,6 +369,35 @@ def _normalize_also_commit_paths(paths: list[str], target_repo_root: Path) -> li
     return normalized
 
 
+def _warn_spec_file_dangling(state, target_repo_root, command, also_commit_rel=()):
+    if not state.spec_file:
+        return
+    status = spec_file_tracking_status(target_repo_root, state.spec_file)
+    if status in ("tracked", "unknown"):
+        return
+    if status == "untracked" and str(state.spec_file) in also_commit_rel:
+        return
+    if status == "outside":
+        print(
+            f"warning: spec file {state.spec_file} resolves outside target repo root "
+            f"{target_repo_root}; its trailer will point nowhere resolvable. "
+            f"Consider moving the spec into the repo.",
+            file=sys.stderr,
+        )
+    elif command == "commit":
+        print(
+            f"warning: spec file {state.spec_file} is inside the repo but not yet committed. "
+            f"Use --also-commit {state.spec_file} to include it in this commit.",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            f"warning: spec file {state.spec_file} is not committed to the target repo, "
+            f"so the PR's trailer will be unresolvable.",
+            file=sys.stderr,
+        )
+
+
 def cmd_repo_commit(args):
     """Stage and commit exactly this run's fixed-finding files that are
     still dirty, plus any --also-commit files explicitly named (e.g.
@@ -388,6 +418,8 @@ def cmd_repo_commit(args):
     except RepoError as e:
         print(str(e), file=sys.stderr)
         sys.exit(1)
+
+    _warn_spec_file_dangling(state, args.target_repo_root, "commit", also_commit_rel=also_commit)
 
     if not files:
         print(
@@ -441,6 +473,7 @@ def cmd_repo_pr_create(args):
     if not fixed:
         print("no fixed findings recorded on this run — nothing to describe in the PR", file=sys.stderr)
         sys.exit(1)
+    _warn_spec_file_dangling(state, args.target_repo_root, "pr create")
 
     branch = args.branch or f"relay/{args.run_id}"
     title = args.title or f"relay: {len(fixed)} finding(s) fixed ({args.run_id})"

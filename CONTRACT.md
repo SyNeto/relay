@@ -75,7 +75,7 @@ Fields:
 | `run_id` | string | |
 | `max_iterations` | int | fixed at creation |
 | `gate_severities` | list of severity strings | fixed at creation — which severities gate the exit condition |
-| `spec_file` | string or null | optional, fixed at creation — path to the spec document (e.g. from `relay spec draft --output`) that drove this run, for traceability; not validated to exist or be readable |
+| `spec_file` | string or null | optional, fixed at creation — path to the spec document (e.g. from `relay spec draft --output`) that drove this run, for traceability; not validated to exist or be readable; `repo commit`/`repo pr create` warn (stderr, non-blocking) if this path isn't git-tracked in `target_repo_root` — a signal, not a gate |
 | `iteration` | int | current iteration number, starts at 0, incremented by `run start` |
 | `phase` | string | one of `find`, `fix`, `validate`, `commit` — set by the CLI subcommand currently in use, informational |
 | `findings` | list of finding records | see schema below |
@@ -220,6 +220,12 @@ prints the draft to stdout by default; `--output PATH` writes it to disk instead
 existing file there without `--force` — the same precedent `relay skill install` already sets for writing
 a file asset). The evidence convention is unchanged: the driving agent reviews, then commits by hand —
 `relay` never commits anything on its own behalf, here or anywhere else in this contract.
+
+When the spec is meant to back a real, published run — one that will be committed, pushed, or PR'd — it
+should be committed into the target repo (e.g. under `docs/specs/`) before `run start --spec-file`
+references it. Otherwise the `Spec-File:` trailer in the published commit or PR will point at a path no one
+else can resolve. As a safety net, `repo commit` and `repo pr create` warn (but do not error) at publish
+time when the referenced spec file isn't tracked in the repo.
 
 ## Review (independent critique)
 
@@ -375,6 +381,13 @@ is set. `-m TEXT` replaces only the headline; every other section is still gener
 committing, any dirty files outside the committed set (e.g. a fix that required touching a second, unlisted
 file) are printed as a note — left for the driving agent to handle, not silently dropped.
 
+Before committing, when the run's `spec_file` is set but that path is not git-tracked inside
+`target_repo_root`, `repo commit` prints a non-blocking `warning:` (no `[relay]` prefix) to stderr. Two
+cases apply: if the path lies entirely outside `target_repo_root`, move it into the repo; if it is inside
+`target_repo_root` but not yet committed, pass it via `--also-commit <path>`. The warning is suppressed
+when the untracked path is already named in `--also-commit`. A failure in the tracking check itself is
+silently swallowed — it never blocks the commit.
+
 **`relay repo pr create` does not yet support `--also-commit`.** A pure-bookkeeping run (zero fixed
 findings, only `--also-commit` files) can `repo commit` through relay but cannot `repo pr create` — that
 command still requires at least one fixed finding to describe in the PR body, and refuses otherwise. The
@@ -397,6 +410,12 @@ their own explicit, remote-visible action, and auto-chaining a push would blur w
 what and could mask a push failure behind a confusing `gh` error. `--base` has no relay-side default
 (omitted → `gh` falls back to the repo's configured default branch) — hardcoding `dev` would assume every
 target repo follows git-flow, which nothing else here assumes. Prints the created PR's URL.
+
+Like `repo commit`, `repo pr create` prints a non-blocking `warning:` to stderr when the run's `spec_file`
+is set but not git-tracked inside `target_repo_root` — the same two cases (entirely outside the repo, or
+inside but not yet committed) apply. There is no `--also-commit` suppression here: `repo pr create` doesn't
+support that flag at all (per this section's boundary note above), so by the time this warning could fire,
+there's nothing left for the caller to name.
 
 **Post-release dev sync.** `relay repo sync-dev <target_repo_root> [--main-branch main] [--dev-branch dev]
 [--remote NAME] --i-understand-this-rewrites-dev-history` — after a release ships from `main`, rebases `dev`
