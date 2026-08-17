@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.9.1 — Skill coverage for push, PR creation, and dev sync
+
+The fast-follow deferred at the end of 0.9.0, same split as 0.6.0/0.6.1: `SKILL.md`/`AGENT.md` shipped
+untouched with 0.9.0 since nothing in them became actively false, only incomplete. Closes that gap.
+
+Produced end to end via `relay` on itself, for the first time letting `relay fix run` generate the actual
+skill-file edits rather than hand-editing them (as 0.5.1/0.6.1/0.6.0's surgical fix all were): `relay spec
+draft` produced an itemized edit spec from `CONTRACT.md` + the 0.6.1 precedent as context; 8 findings (4 per
+file — capabilities-table row, playbook Execute-step mention, a new Notes bullet for `repo sync-dev`, and
+the stale `v0.8.0` version stamp) went through `relay fix run` via `--provider opencode-go`. One diff
+(the capabilities-table row, in both files) came back accurate but nearly 2x the length of every other row
+in the table — a real scannability regression in a file meant to stay terse — caught in Validate and
+tightened by hand rather than re-running the model against the same prompt.
+
+Both files: capabilities table's repo row extended to `repo setup` / `repo commit` / `repo push` / `repo pr
+create` (one row, not four — they're the same local-git-plumbing-then-publish family); the "fuzzy idea"
+playbook's Execute step now mentions `repo push`/`repo pr create` once a branch is ready; Notes gains a
+`repo sync-dev` bullet (placed there, not in the per-run walkthrough, since it's repo-level maintenance, not
+part of any single run's lifecycle); version stamp bumped `v0.8.0` → `v0.9.1`. Frontmatter `description`
+fields deliberately not broadened, same reasoning 0.6.1 already applied to `repo setup`/`repo commit`: these
+are sub-steps of the already-matched find/fix/validate flow, not an independently-triggered user intent.
+
+Also validated live, further along the lifecycle than any prior release: `repo setup` (no `--base-branch`,
+since `relay`'s own repo is main-only, not git-flow), `repo commit`, `repo push`, and `repo pr create` all
+run for real against `relay`'s own GitHub repo — the first time this project's own dev loop went through a
+real PR instead of a direct `merge --no-ff` to `main`. `gh pr merge` stays unwrapped by design (see 0.9.0);
+the PR is reviewed and merged by hand.
+
 ## 0.9.0 — Push, PR creation, and post-release dev sync
 
 The "glue" work deferred since 0.6.0. Meaningfully higher-stakes than every prior release: this touches a
