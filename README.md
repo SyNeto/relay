@@ -49,11 +49,21 @@ relay finding mark my-run-1 f1 fixed
 relay finding mark my-run-1 f2 fixed
 relay repo commit my-run-1 /path/to/target-repo             # commits just f1/f2's files
 relay run status my-run-1
+relay repo push my-run-1 /path/to/target-repo                # never force
+relay repo pr create my-run-1 /path/to/target-repo --base dev
 relay run list                                               # every run under --state-dir, at a glance
 ```
 
-(`--spec-file` and `repo setup`/`repo commit` are both optional — the loop works the same without them,
-tracking a run's spec and handling git plumbing entirely by hand instead.)
+(`--spec-file` and `repo setup`/`repo commit`/`repo push`/`repo pr create` are all optional — the loop works
+the same without them, tracking a run's spec and handling git plumbing entirely by hand instead. Merging the
+PR is deliberately not wrapped — see CONTRACT.md's "Repository management" section for why.)
+
+For git-flow-style repos, post-release maintenance keeps `dev` rebased onto `main` (rewrites `dev`'s
+history — requires an explicit, deliberately unmissable opt-in flag; not run-scoped):
+
+```bash
+relay repo sync-dev /path/to/target-repo --i-understand-this-rewrites-dev-history
+```
 
 Drafting a new spec document (Discover/Generate — stateless, no run needed):
 
@@ -114,6 +124,7 @@ model calls identically regardless of which harness is driving it.
 
 ## Status
 
-Active alpha, with local git plumbing (branch isolation, scoped commits) and run→spec traceability as of
-this release. Pushing, pull requests, and merging are still entirely manual — deliberately deferred. See
-`CHANGELOG.md` for release history and current phase.
+Active alpha. Run→spec traceability, local git plumbing (branch isolation, scoped commits), and now
+publishing (push, PR creation, git-flow post-release `dev` sync) are all handled. Merging a pull request
+stays deliberately manual — not deferred-for-now, but out of scope by design: see CONTRACT.md's
+"Repository management" section. See `CHANGELOG.md` for release history and current phase.
