@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.9.6 — `relay repo check-integration` + a narrowed version-bump reminder
+## 0.10.0 — `relay repo check-integration` + a narrowed version-bump reminder
 
 Fixes [#10](https://github.com/SyNeto/relay/issues/10): two real version-number collisions this session
 (PR #1 vs PR #6, PR #8 vs PR #9) surfaced only as confusing `CHANGELOG.md` merge conflicts, because two
