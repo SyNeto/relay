@@ -45,6 +45,30 @@ def _state_dir_arg(parser: argparse.ArgumentParser):
     )
 
 
+def _retry_args(parser: argparse.ArgumentParser):
+    retry_group = parser.add_mutually_exclusive_group()
+    retry_group.add_argument(
+        "--max-retries",
+        type=int,
+        default=openai_compat_client.DEFAULT_MAX_RETRIES,
+        help="retry attempts on transient errors (429/5xx/timeout/connection) before giving up "
+        f"(default: {openai_compat_client.DEFAULT_MAX_RETRIES}) — never retries a malformed model response",
+    )
+    retry_group.add_argument(
+        "--no-retry",
+        action="store_const",
+        dest="max_retries",
+        const=0,
+        help="disable retry entirely, same as --max-retries 0",
+    )
+    parser.add_argument(
+        "--retry-base-delay",
+        type=float,
+        default=None,
+        help="override the per-error-class default backoff base, in seconds",
+    )
+
+
 def _load_state(run_id: str, args) -> RunState:
     return RunState(run_id, state_dir=args.state_dir or default_state_dir())
 
@@ -139,14 +163,16 @@ def cmd_fix_run(args):
     prompt = build(finding)
     print(f"[{args.finding_id}] calling {provider_config.name} (timeout={args.timeout}s)...")
     try:
-        raw = openai_compat_client.chat(
+        raw = openai_compat_client.chat_with_retry(
             prompt["user"],
             run_id=args.run_id,
             config=provider_config,
             system=prompt["system"],
             timeout=args.timeout,
+            max_retries=args.max_retries,
+            base_delay=args.retry_base_delay,
         )
-    except openai_compat_client.ProviderTimeoutError as e:
+    except openai_compat_client.ProviderError as e:
         print(f"[{args.finding_id}] MODEL CALL FAILED: {e}")
         sys.exit(1)
 
@@ -197,14 +223,16 @@ def cmd_spec_draft(args):
 
     print(f"calling {provider_config.name} (timeout={args.timeout}s)...", file=sys.stderr)
     try:
-        raw = openai_compat_client.chat(
+        raw = openai_compat_client.chat_with_retry(
             prompt["user"],
             run_id="adhoc-spec",
             config=provider_config,
             system=prompt["system"],
             timeout=args.timeout,
+            max_retries=args.max_retries,
+            base_delay=args.retry_base_delay,
         )
-    except openai_compat_client.ProviderTimeoutError as e:
+    except openai_compat_client.ProviderError as e:
         print(f"MODEL CALL FAILED: {e}", file=sys.stderr)
         sys.exit(1)
 
@@ -270,14 +298,16 @@ def cmd_review_run(args):
 
     print(f"calling {provider_config.name} (timeout={args.timeout}s)...", file=sys.stderr)
     try:
-        raw = openai_compat_client.chat(
+        raw = openai_compat_client.chat_with_retry(
             prompt["user"],
             run_id="adhoc-review",
             config=provider_config,
             system=prompt["system"],
             timeout=args.timeout,
+            max_retries=args.max_retries,
+            base_delay=args.retry_base_delay,
         )
-    except openai_compat_client.ProviderTimeoutError as e:
+    except openai_compat_client.ProviderError as e:
         print(f"MODEL CALL FAILED: {e}", file=sys.stderr)
         sys.exit(1)
 
@@ -520,6 +550,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("target_repo_root", type=Path)
     p.add_argument("--provider", default="nim", help="which configured provider to fix with (default: nim)")
     p.add_argument("--timeout", type=float, default=openai_compat_client.DEFAULT_TIMEOUT)
+    _retry_args(p)
     _state_dir_arg(p)
     p.set_defaults(func=cmd_fix_run)
 
@@ -537,6 +568,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--provider", default="nim", help="which configured provider to draft with (default: nim)")
     p.add_argument("--timeout", type=float, default=openai_compat_client.DEFAULT_TIMEOUT)
+    _retry_args(p)
     p.add_argument("--output", default=None, help="write the draft here instead of printing to stdout")
     p.add_argument("--force", action="store_true", help="overwrite --output if it already exists")
     p.set_defaults(func=cmd_spec_draft)
@@ -566,6 +598,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--provider", default="nim", help="which configured provider to review with (default: nim)")
     p.add_argument("--timeout", type=float, default=openai_compat_client.DEFAULT_TIMEOUT)
+    _retry_args(p)
     p.add_argument("--output", default=None, help="write the review here instead of printing to stdout")
     p.add_argument("--force", action="store_true", help="overwrite --output if it already exists")
     p.set_defaults(func=cmd_review_run)

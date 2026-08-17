@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.9.1 — Bounded retry/backoff on transient provider failures
+
+Fixes [#3](https://github.com/SyNeto/relay/issues/3), filed after a real incident during the skill-coverage
+fast-follow dogfood run (PR #1): a 429 from `nim` (confirmed provider-side — `relay quota status` showed
+near-zero local usage), a manual retry that also 429'd, then a fallback to `opencode-go` that hit a plain
+timeout. The closing check was silently skipped.
+
+Went through the full propose → review → adjust process: `relay spec draft` produced an initial design,
+`relay review run` gave it an independent critique, and a few things it caught changed the final shape —
+most importantly, the incident's 429 was **persistent**, so the proposal's original defaults (retrying with
+the same 15s wait the incident already showed failing) would have automated a strategy already proven
+insufficient. This ships as **transient-blip resilience + visibility, not an incident fix** — a genuinely
+down provider will still exhaust the retry budget and fail; that's provider fallback's job, deliberately
+deferred as a separate, later issue.
+
+`openai_compat_client.py` gains a typed `ProviderError` hierarchy (`ProviderTimeoutError`,
+`ProviderConnectionError`, `ProviderRateLimitError`, `ProviderServerError`, `ProviderAuthError`,
+`ProviderRequestError`, `ProviderUnknownError`), each with a `retryable` class attribute, and
+`classify_openai_error()` mapping real openai SDK exceptions onto it — 429/5xx(500/502/503/504)/timeout/
+connection are retryable, 401/4xx are not (retrying a request that can never succeed is pure waste), and an
+unrecognized SDK exception type classifies as `ProviderUnknownError` (never retried — "fail loudly, never
+guess" extended to error classification itself). `Retry-After` is respected when present (from both 429 and
+any 5xx that carries it), clamped to `--retry-base-delay`'s `max_delay`; if a provider asks for longer than
+that, `should_retry` fails fast rather than burning a retry attempt that will likely just 429 again.
+
+New `chat_with_retry()`, sibling to `chat()` (not routed through `registry.chat_for()` — verified `cli.py`
+calls `chat()` directly today, so the retry wrapper stays in the same module rather than widening the
+provider-dispatch seam). `relay fix run`/`spec draft`/`review run` gain `--max-retries N` (default 2),
+`--no-retry` (mutually exclusive with `--max-retries`), and `--retry-base-delay SECONDS`. Every retry
+prints to stderr with a `[relay] attempt N/M` prefix — a first-attempt success prints nothing, so silence on
+stderr means no retry happened. Default policy's worst-case wall clock before giving up: roughly
+3 × 90s timeout + ~45s backoff ≈ 6 minutes — documented explicitly in CONTRACT.md rather than left for a
+driving agent to discover by waiting.
+
+New `tests/test_openai_compat_client.py` (no file existed for this module before): the full classification
+mapping tested with **real** SDK exceptions built on real `httpx2` `Request`/`Response` objects (`httpx2` is
+a genuine, independently pip-installed package required by `openai`, not something needing mocking — this
+was verified directly, resolving what the initial design proposal had flagged as an open question), plus the
+pure `should_retry`/`compute_backoff` decision functions. No mocking anywhere, matching the codebase's
+existing convention exactly.
+
 ## 0.9.0 — Push, PR creation, and post-release dev sync
 
 The "glue" work deferred since 0.6.0. Meaningfully higher-stakes than every prior release: this touches a
