@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.9.5 — warn on a dangling `Spec-File:` trailer at publish time
+
+Fixes [#5](https://github.com/SyNeto/relay/issues/5): `relay spec draft --output` can write a draft
+anywhere, including an ephemeral scratch/tmp path, and `relay run start --spec-file` stores that path
+verbatim by design (never validated to exist or be readable). `relay repo commit`/`relay repo pr create`
+then embed it as a `Spec-File:` trailer in a real, permanent commit or PR — which is exactly what happened
+during this session's own dogfooding (PR #1): the spec was drafted to a session-specific `/tmp/...` path
+and never moved into the target repo, so the merged PR's trailer points at a path nobody else can resolve.
+
+`relay spec draft` (`opencode-go`, after another `nim` 429) proposed a non-blocking warning at
+`repo commit`/`repo pr create` time; `relay review run` (`nim` down again, fell back to `opencode-go`)
+sharpened several of the proposal's own open questions: warn at *both* `repo commit` and `repo pr create`
+(separate invocations, possibly different agent sessions, with no shared memory of an earlier warning, not
+just `repo commit`); implement `--also-commit` suppression (one set-membership check, not worth skipping);
+drop the proposal's `[relay]`-prefixed wording in favor of this codebase's actual non-retry stderr
+convention (`warning:`, matching the existing `note:` precedent — `[relay]` is reserved for retry notices);
+branch the warning text on "outside the target repo entirely" vs. "inside but not yet committed" (different
+failure modes, different fixes, and a generic message trains agents to skim both wrong); and fix a
+self-contradictory clause in the proposal's own `pr create` warning text.
+
+New `spec_file_tracking_status(repo_root, spec_file)` in `engine/repo.py` — pure, deliberately never
+raises (advisory-only, must never block a commit or PR over a broken check): returns `"tracked"`,
+`"untracked"`, `"outside"`, or `"unknown"`. `cli.py` gains `_warn_spec_file_dangling`, called from both
+`cmd_repo_commit` and `cmd_repo_pr_create`, printing a non-blocking, case-branched `warning:` to stderr —
+suppressed at commit time when the untracked path is already named in `--also-commit`. CONTRACT.md and
+both skill files (`SKILL.md`/`AGENT.md`, confirmed identical at this step) document the new warning and a
+durable-spec-location convention (commit specs meant to back a real publish into the target repo, e.g.
+under `docs/specs/`, before referencing them).
+
+Implemented through `relay`'s own Find→Fix→Validate loop end to end: 13 findings, `relay fix run
+--provider opencode-go` per finding (`nim` hit 429s repeatedly again during this arc — the same
+persistent-account-throttling pattern seen across issues #3/#4/#5). Two diffs failed Validate and were
+hand-corrected rather than re-prompted indefinitely: a CONTRACT.md paragraph that hallucinated an unrelated
+"fenced scope block" concept on the first *and* second attempt (rewritten by hand after two failed tries,
+per this project's own "don't spend unlimited retries against the same prompt" discipline), and an
+AGENT.md addition that dropped the file's own backtick convention for command references — the same slip
+caught and corrected during 0.9.4's Validate pass. Live-verified all three warning paths (outside, untracked
+suppressed, untracked unsuppressed) against real scratch git repos before publishing.
+
 ## 0.9.3 — `repo commit --also-commit` for release bookkeeping
 
 Fixes [#2](https://github.com/SyNeto/relay/issues/2): `relay repo commit` only ever staged files tied to a
