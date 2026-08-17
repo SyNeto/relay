@@ -147,6 +147,10 @@ This envelope and the prompt templates that produce it are the current Layer 2/3
 specialization (e.g. spec *generation* rather than fixing an existing finding) may define a different
 envelope for that task — this contract only covers the fix-an-existing-finding case.
 
+**Retry never applies here.** A malformed envelope is a model-judgment or prompt-formatting problem, not a
+transport failure — resending the same prompt to the same model would produce the same non-conforming
+result. Retry (below) operates strictly at the transport layer, before a response ever reaches this parser.
+
 ## Model connector
 
 `relay fix run` sends its prompt to a configured **provider** — external, user-editable config (`name`,
@@ -156,6 +160,24 @@ works zero-config); `~/.relay/providers.json` overrides or adds provider entries
 replaces that provider's whole record, not a field-level merge. Select one via
 `relay fix run ... --provider NAME` (default: `nim`). `relay quota status` tracks each provider's request
 volume independently — one account, one log file, one report block.
+
+**Bounded retry on transient transport errors.** `relay fix run`, `relay spec draft`, and `relay review run`
+retry a call automatically when the failure is plausibly transient: a 429 rate limit, a 5xx server error
+(500/502/503/504 — not 501/505/511, which mean "this will never work," not "try again"), a connection
+failure, or a timeout. A 401 auth failure or a 400/403/404/422 request error fails immediately with no
+retry — retrying a request that can never succeed is pure waste. Default `--max-retries 2` (3 total
+attempts), exponential backoff from a per-error-class base delay (with jitter), respecting the provider's
+own `Retry-After` header when present. `--no-retry` (or `--max-retries 0`) restores the exact single-attempt
+behavior; `--retry-base-delay SECONDS` overrides the per-class defaults uniformly.
+
+This is **transient-blip resilience, not a fix for a persistent outage** — a provider that's genuinely down
+will still exhaust the retry budget and fail. With the default timeout (90s) and retry policy, the
+worst-case wall clock before giving up is roughly 3 × 90s + ~45s of backoff ≈ **6 minutes**. Every retry
+prints to stderr with a `[relay]` prefix and an `attempt N/M` counter (never to stdout, which carries only
+the model's response) — a first-attempt success prints nothing, so silence on stderr means no retry
+happened. **Provider fallback** (trying a second provider when the first is persistently unavailable)
+remains a known gap, not yet implemented — a driving agent that hits a persistent outage must retry
+manually with a different `--provider` by hand.
 
 ## Discover & Generate (spec authorship)
 
@@ -393,9 +415,9 @@ enforcement point. A harness integration should never need to touch `relay`'s in
 - `relay finding record <run_id> [--from-json PATH]` (JSON object or array; also accepts stdin)
 - `relay finding verify <run_id> <target_repo_root>`
 - `relay finding mark <run_id> <finding_id> <status>`
-- `relay fix run <run_id> <finding_id> <target_repo_root> [--timeout SECONDS] [--provider NAME]`
-- `relay spec draft --request TEXT --context-file PATH [--context-file PATH ...] [--provider NAME] [--timeout SECONDS] [--output PATH] [--force]`
-- `relay review run --decision TEXT [--context-file PATH ...] [--diff-from-branch BRANCH --target-repo-root PATH] [--provider NAME] [--timeout SECONDS] [--output PATH] [--force]` — at least one of `--context-file`/`--diff-from-branch` required
+- `relay fix run <run_id> <finding_id> <target_repo_root> [--timeout SECONDS] [--provider NAME] [--max-retries N | --no-retry] [--retry-base-delay SECONDS]`
+- `relay spec draft --request TEXT --context-file PATH [--context-file PATH ...] [--provider NAME] [--timeout SECONDS] [--output PATH] [--force] [--max-retries N | --no-retry] [--retry-base-delay SECONDS]`
+- `relay review run --decision TEXT [--context-file PATH ...] [--diff-from-branch BRANCH --target-repo-root PATH] [--provider NAME] [--timeout SECONDS] [--output PATH] [--force] [--max-retries N | --no-retry] [--retry-base-delay SECONDS]` — at least one of `--context-file`/`--diff-from-branch` required
 - `relay repo setup <run_id> <target_repo_root> [--branch NAME] [--base-branch NAME] [--remote NAME]`
 - `relay repo commit <run_id> <target_repo_root> [-m TEXT]`
 - `relay repo push <run_id> <target_repo_root> [--branch NAME] [--remote NAME]`
