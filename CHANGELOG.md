@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.9.6 — `relay repo check-integration` + a narrowed version-bump reminder
+
+Fixes [#10](https://github.com/SyNeto/relay/issues/10): two real version-number collisions this session
+(PR #1 vs PR #6, PR #8 vs PR #9) surfaced only as confusing `CHANGELOG.md` merge conflicts, because two
+branches, forked from the same base, each independently picked the same "next version" while both PRs sat
+open and unmerged — a state no local git check can observe.
+
+Two full propose→review cycles, not one. Cycle 1 designed a local `--version` flag on `repo commit`
+checking git tags/`CHANGELOG.md`/a fetched `origin/main`; its own analysis proved this would not have
+prevented either real incident (both were simultaneous-open-PR collisions), and review agreed, further
+finding the commit-time hook fires at the wrong moment and the opt-in flag replicates the exact
+forgetfulness that caused the incidents. Discussed live with the maintainer, who pushed back on my own
+"no GitHub polling" framing from cycle 1 and asked for a checker that actually inspects live PR state.
+Cycle 2 designed `relay repo check-integration`; review found real correctness bugs in its first draft —
+`git fetch` of a PR's branch name silently breaks for fork PRs (fixed by using `gh pr diff <N>` instead,
+which resolves any PR regardless of origin), and full-file `CHANGELOG.md` scanning only works if the file
+happens to be newest-first (fixed by extracting only a diff's *added* lines).
+
+New in `engine/repo.py`: `list_open_prs`/`pr_diff` (shell out to `gh`), `extract_added_version` (diff-based,
+pure), `changelog_has_version` (local, never raises), `find_version_collisions` (pure grouping). New
+`relay repo check-integration <target_repo_root> [--base main] [--remote origin] [--fail-on-collision]` —
+advisory, never resolves anything, reports any version claimed by 2+ open PRs or already released on a
+freshly-fetched `--base`. `--fail-on-collision` is opt-in, following the same non-default-exit-code
+precedent as `--no-retry`/`--i-understand-this-rewrites-dev-history`. `relay repo commit` gains a narrowed,
+diff-based reminder (not merely "the file is present in the commit set", to avoid the habituation risk a
+broader trigger would create) pointing at the new command.
+
+Two real bugs caught during live verification, after Validate had already accepted the diffs — both fixed
+before publishing: (1) the version-extraction regex read an in-place edit to an *existing* CHANGELOG entry
+(e.g. a typo fix) as a brand-new version, because editing a line produces a matching removed+added pair
+with the *same* version number in a unified diff — fixed by excluding any added version that also appears
+removed in the same diff, with new test coverage for exactly this shape. (2) The "already released"
+check read the possibly-stale *local* `--base` branch instead of a freshly-fetched one, so it silently
+missed a version that had, in fact, already been merged and released — fixed by fetching `--remote`/`--base`
+fresh first (same mechanism `sync-dev` already uses), with a new `--remote` flag.
+
+Verified live end to end against a disposable scratch GitHub repo with three real open PRs: two colliding
+on the same version (correctly flagged), one distinct (correctly not flagged), then a fourth PR opened
+after squash-merging the third — confirming the already-released path also fires correctly once the fetch
+bug above was fixed. Scratch repo and PRs cleaned up after verification.
+
 ## 0.9.5 — warn on a dangling `Spec-File:` trailer at publish time
 
 Fixes [#5](https://github.com/SyNeto/relay/issues/5): `relay spec draft --output` can write a draft

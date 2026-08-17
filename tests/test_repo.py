@@ -7,13 +7,16 @@ from relay.engine.repo import (
     RepoError,
     branch_exists,
     build_commit_message,
+    changelog_has_version,
     checkout_or_create_branch,
     create_pull_request,
     current_branch,
     diff_against,
     build_pr_body,
     dirty_files,
+    extract_added_version,
     fetch_branch,
+    find_version_collisions,
     is_dirty,
     push_branch,
     push_force_with_lease,
@@ -673,3 +676,87 @@ def test_spec_file_tracking_status_outside(tmp_path):
 
 def test_spec_file_tracking_status_unknown_when_not_a_git_repo(tmp_path):
     assert spec_file_tracking_status(tmp_path, "anything.md") == "unknown"
+
+
+def test_extract_added_version_changelog_heading():
+    diff = "--- a/CHANGELOG.md\n+++ b/CHANGELOG.md\n@@ -1,3 +1,6 @@\n # Changelog\n \n+## 1.0.0 -- release\n+\n+some notes\n"
+    assert extract_added_version(diff) == "1.0.0"
+
+
+def test_extract_added_version_bracketed_heading():
+    diff = "+## [2.3.4] -- release\n"
+    assert extract_added_version(diff) == "2.3.4"
+
+
+def test_extract_added_version_pyproject_line():
+    diff = '--- a/pyproject.toml\n+++ b/pyproject.toml\n@@ -5,1 +5,1 @@\n-version = "1.0.0"\n+version = "1.0.1"\n'
+    assert extract_added_version(diff) == "1.0.1"
+
+
+def test_extract_added_version_no_match_returns_none():
+    diff = "--- a/README.md\n+++ b/README.md\n@@ -1,1 +1,1 @@\n-old text\n+new text\n"
+    assert extract_added_version(diff) is None
+
+
+def test_extract_added_version_ignores_removed_heading():
+    diff = "--- a/CHANGELOG.md\n+++ b/CHANGELOG.md\n@@ -1,3 +1,1 @@\n-## 1.0.0 -- old\n someone edited around it\n"
+    assert extract_added_version(diff) is None
+
+
+def test_extract_added_version_ignores_in_place_heading_edit():
+    # editing an EXISTING entry's prose (e.g. a typo fix) produces a removed and an
+    # added line with the SAME version number -- this must not read as a new version
+    diff = (
+        "--- a/CHANGELOG.md\n+++ b/CHANGELOG.md\n@@ -1,1 +1,1 @@\n"
+        "-## 1.0.0 -- new release\n+## 1.0.0 -- new release, fixed typo\n"
+    )
+    assert extract_added_version(diff) is None
+
+
+def test_extract_added_version_finds_new_heading_alongside_unrelated_edit():
+    # a genuinely new heading should still be found even when the diff also
+    # contains an in-place edit of a different, older version's entry
+    diff = (
+        "--- a/CHANGELOG.md\n+++ b/CHANGELOG.md\n@@ -1,4 +1,6 @@\n"
+        "+## 1.1.0 -- new release\n+\n"
+        "-## 1.0.0 -- old\n+## 1.0.0 -- old, fixed typo\n"
+    )
+    assert extract_added_version(diff) == "1.1.0"
+
+
+def test_find_version_collisions_groups_matching():
+    claims = [{"source": "PR #1", "version": "1.0.0"}, {"source": "PR #2", "version": "1.0.0"}, {"source": "PR #3", "version": "2.0.0"}]
+    collisions = find_version_collisions(claims)
+    assert set(collisions.keys()) == {"1.0.0"}
+    assert len(collisions["1.0.0"]) == 2
+
+
+def test_find_version_collisions_no_collision():
+    claims = [{"source": "PR #1", "version": "1.0.0"}, {"source": "PR #2", "version": "2.0.0"}]
+    assert find_version_collisions(claims) == {}
+
+
+def test_changelog_has_version_true_when_present(tmp_path: Path):
+    repo = _git_repo(tmp_path)
+    (repo / "CHANGELOG.md").write_text("# Changelog\n\n## 1.0.0 -- release\n")
+    _git(repo, "add", "CHANGELOG.md")
+    _git(repo, "commit", "-q", "-m", "add changelog")
+    assert changelog_has_version(repo, "HEAD", "1.0.0") is True
+
+
+def test_changelog_has_version_false_when_absent_version(tmp_path: Path):
+    repo = _git_repo(tmp_path)
+    (repo / "CHANGELOG.md").write_text("# Changelog\n\n## 1.0.0 -- release\n")
+    _git(repo, "add", "CHANGELOG.md")
+    _git(repo, "commit", "-q", "-m", "add changelog")
+    assert changelog_has_version(repo, "HEAD", "2.0.0") is False
+
+
+def test_changelog_has_version_false_when_file_missing(tmp_path: Path):
+    repo = _git_repo(tmp_path)
+    assert changelog_has_version(repo, "HEAD", "1.0.0") is False
+
+
+def test_changelog_has_version_false_when_ref_missing(tmp_path: Path):
+    repo = _git_repo(tmp_path)
+    assert changelog_has_version(repo, "refs/heads/does-not-exist", "1.0.0") is False

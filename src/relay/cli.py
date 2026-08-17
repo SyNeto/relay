@@ -3,6 +3,7 @@ import argparse
 import difflib
 import json
 import shutil
+import subprocess
 import sys
 from importlib import resources
 from pathlib import Path
@@ -19,11 +20,16 @@ from relay.engine.repo import (
     RepoError,
     build_commit_message,
     build_pr_body,
+    changelog_has_version,
     checkout_or_create_branch,
     create_pull_request,
     diff_against,
     dirty_files,
+    extract_added_version,
     fetch_branch,
+    find_version_collisions,
+    list_open_prs,
+    pr_diff,
     push_branch,
     push_force_with_lease,
     rebase_onto,
@@ -398,6 +404,26 @@ def _warn_spec_file_dangling(state, target_repo_root, command, also_commit_rel=(
         )
 
 
+def _run_diff_head(repo_root, path):
+    result = subprocess.run(["git", "diff", "HEAD", "--", path], cwd=repo_root, capture_output=True, text=True)
+    return result.stdout
+
+
+def _warn_version_bump_uncoordinated(target_repo_root, files):
+    for path in ("CHANGELOG.md", "pyproject.toml"):
+        if path not in files:
+            continue
+        diff = _run_diff_head(target_repo_root, path)
+        if extract_added_version(diff):
+            print(
+                f"warning: {path} adds a new version -- relay cannot detect whether another open PR "
+                "claims the same one. Run `relay repo check-integration` before merging, or coordinate "
+                "out-of-band.",
+                file=sys.stderr,
+            )
+            return
+
+
 def cmd_repo_commit(args):
     """Stage and commit exactly this run's fixed-finding files that are
     still dirty, plus any --also-commit files explicitly named (e.g.
@@ -420,6 +446,7 @@ def cmd_repo_commit(args):
         sys.exit(1)
 
     _warn_spec_file_dangling(state, args.target_repo_root, "commit", also_commit_rel=also_commit)
+    _warn_version_bump_uncoordinated(args.target_repo_root, files)
 
     if not files:
         print(
@@ -512,6 +539,64 @@ def cmd_repo_sync_dev(args):
         print(str(e), file=sys.stderr)
         sys.exit(1)
     print(f"{args.dev_branch}: rebased onto {args.main_branch} and force-with-lease-pushed to {args.remote}")
+
+
+def cmd_repo_check_integration(args):
+    """Advisory, non-run-scoped: inspects every open PR against
+    target_repo_root's remote plus the --base branch's own released
+    versions, and reports (never resolves) any version claimed by more
+    than one of them. See CONTRACT.md's "Repository management"
+    section.
+    """
+    try:
+        prs = list_open_prs(args.target_repo_root)
+    except RepoError as e:
+        print(str(e), file=sys.stderr)
+        sys.exit(1)
+
+    claims = []
+    print(f"checking {len(prs)} open PR(s) in {args.target_repo_root}:")
+    for pr in prs:
+        number = pr["number"]
+        try:
+            diff = pr_diff(args.target_repo_root, number)
+        except RepoError:
+            print(f"  PR #{number}: could not read diff, skipping", file=sys.stderr)
+            continue
+        version = extract_added_version(diff)
+        if version:
+            claims.append({"source": f"PR #{number}", "version": version})
+            print(f"  PR #{number} claims {version}")
+        else:
+            print(f"  PR #{number}: could not determine version (skipped)")
+
+    checked_versions = {c["version"] for c in claims}
+    try:
+        fetch_branch(args.target_repo_root, args.remote, args.base)
+        base_ref = f"{args.remote}/{args.base}"
+    except RepoError as e:
+        print(f"warning: could not fetch {args.remote}/{args.base} fresh ({e}); "
+              "already-released versions won't be checked", file=sys.stderr)
+        base_ref = None
+    if base_ref:
+        for version in checked_versions:
+            if changelog_has_version(args.target_repo_root, base_ref, version):
+                claims.append({"source": f"already released on {base_ref}", "version": version})
+
+    collisions = find_version_collisions(claims)
+    if not collisions:
+        print("no version collisions found")
+        sys.exit(0)
+
+    print("\nCOLLISION DETECTED:", file=sys.stderr)
+    for version, group in collisions.items():
+        sources = ", ".join(c["source"] for c in group)
+        print(f"  version {version} is claimed by {sources}", file=sys.stderr)
+    print("Coordinate with the authors/agents to bump one of them before merging.", file=sys.stderr)
+
+    if getattr(args, "fail_on_collision", False):
+        sys.exit(1)
+    sys.exit(0)
 
 
 def cmd_quota_status(args):
@@ -736,6 +821,19 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="required explicit opt-in — this force-pushes a rewritten dev; other collaborators must reset",
     )
+    p_ci = repo.add_parser(
+        "check-integration",
+        help="advisory: report version collisions across currently open PRs and already-released versions",
+    )
+    p_ci.add_argument("target_repo_root", type=Path)
+    p_ci.add_argument("--base", default="main", help="branch to check already-released versions against (default: main)")
+    p_ci.add_argument("--remote", default="origin", help="remote to fetch --base fresh from before checking")
+    p_ci.add_argument(
+        "--fail-on-collision",
+        action="store_true",
+        help="exit non-zero if a version collision is found (default: always exit 0 on a successful run)",
+    )
+    p_ci.set_defaults(func=cmd_repo_check_integration)
     p.set_defaults(func=cmd_repo_sync_dev)
 
     quota = sub.add_parser("quota", help="model-provider request volume").add_subparsers(
